@@ -1,0 +1,8 @@
+{
+  "Elasticsearch": {
+    "Uri": "",
+    "Username": "",
+    "Password": "",
+    "IndexFormat": "datagate-xray-{0:yyyy.MM.dd}"
+  }
+}

@@ -1,0 +1,35 @@
+# Local: XRay + manager. Copy .env.example to .env and set BACKEND_BASE_URL.
+# Usage: docker compose -f docker-compose.local.yml --env-file .env up --build
+# (Compose also auto-loads a file named .env from this directory for variable substitution.)
+services:
+  xray-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: local-datagate-xray-manager:net10
+    pull_policy: never
+    container_name: datagate-xray-manager-local
+    restart: unless-stopped
+    networks:
+      - xray_network
+    volumes:
+      - ./data/xray_data:/data
+    ports:
+      - "8443:443"
+      - "15010:5010"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Staging
+      DATA_DIR: /data
+      PORT: "443"
+      API_PORT: "5010"
+      PROTO: tcp
+      XRayManagement__Host: "127.0.0.1"
+      XRayManagement__Port: "10085"
+      Backend__BaseUrl: ${BACKEND_BASE_URL:?Set BACKEND_BASE_URL in .env (see .env.example)}
+      DNS1: "8.8.8.8"
+      DNS2: "8.8.4.4"
+      XRAY_TRANSPORT_MODE: "plain"
+
+networks:
+  xray_network:
+    driver: bridge

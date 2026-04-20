@@ -1,0 +1,38 @@
+services:
+  xray-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: datagate-xray-manager:local
+    container_name: datagate-xray-manager
+    restart: unless-stopped
+    networks:
+      - xray_network
+    volumes:
+      - ./data/xray_data:/data
+    ports:
+      - "443:443"
+      - "5010:5010"
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      DATA_DIR: /data
+      PORT: "443"
+      API_PORT: "5010"
+      PROTO: tcp
+      XRayManagement__Host: "127.0.0.1"
+      XRayManagement__Port: "10085"
+      Backend__BaseUrl: "http://localhost:5581/"
+      DNS1: "8.8.8.8"
+      DNS2: "8.8.4.4"
+      # plain | tls | reality — see scripts/xray/render-config.sh
+      XRAY_TRANSPORT_MODE: "${XRAY_TRANSPORT_MODE:-plain}"
+      # Optional: use a host file instead of generated config
+      # XRAY_EXTERNAL_CONFIG_PATH: /data/xray/config.static.json
+      # TLS mode: mount certs and set paths
+      # XRAY_TLS_CERT_FILE: /data/certs/fullchain.pem
+      # XRAY_TLS_KEY_FILE: /data/certs/privkey.pem
+      # REALITY mode: set XRAY_REALITY_PRIVATE_KEY and usually XRAY_REALITY_DEST, XRAY_REALITY_SERVER_NAMES, XRAY_REALITY_SHORT_IDS
+
+networks:
+  xray_network:
+    driver: bridge
