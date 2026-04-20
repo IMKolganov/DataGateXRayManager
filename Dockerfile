@@ -35,13 +35,22 @@ RUN apt-get update && \
         && rm -rf /var/lib/apt/lists/*
 
 # Latest stable GitHub release if XRAY_VERSION build-arg is empty; override e.g. --build-arg XRAY_VERSION=26.3.27
+# TARGETARCH is set by BuildKit (e.g. amd64, arm64); must match the runtime image arch — not always linux-64.zip.
 ARG XRAY_VERSION=
+ARG TARGETARCH
 RUN set -eux; \
+    ARCH="${TARGETARCH:-amd64}"; \
+    case "$ARCH" in \
+        amd64) XRAY_ASSET="Xray-linux-64.zip" ;; \
+        arm64) XRAY_ASSET="Xray-linux-arm64-v8a.zip" ;; \
+        arm) XRAY_ASSET="Xray-linux-arm32-v7a.zip" ;; \
+        *) echo "Unsupported TARGETARCH=${ARCH} (set Docker --platform or use a supported arch)" >&2; exit 1 ;; \
+    esac; \
     if [ -n "${XRAY_VERSION}" ]; then VER="${XRAY_VERSION}"; \
     else VER=$(curl -fsSL https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.tag_name' | sed 's/^v//'); \
     fi; \
-    echo "Installing Xray-core v${VER}"; \
-    curl -fsSL -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/v${VER}/Xray-linux-64.zip"; \
+    echo "Installing Xray-core v${VER} (${XRAY_ASSET} for ${ARCH})"; \
+    curl -fsSL -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/v${VER}/${XRAY_ASSET}"; \
     unzip -q /tmp/xray.zip -d /tmp/xray; \
     mv /tmp/xray/xray /usr/local/bin/xray; \
     chmod +x /usr/local/bin/xray; \
