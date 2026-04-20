@@ -41,9 +41,9 @@ ARG TARGETARCH
 RUN set -eux; \
     ARCH="${TARGETARCH:-amd64}"; \
     case "$ARCH" in \
-        amd64) XRAY_ASSET="Xray-linux-64.zip" ;; \
-        arm64) XRAY_ASSET="Xray-linux-arm64-v8a.zip" ;; \
-        arm) XRAY_ASSET="Xray-linux-arm32-v7a.zip" ;; \
+        amd64|x64) XRAY_ASSET="Xray-linux-64.zip" ;; \
+        arm64|aarch64) XRAY_ASSET="Xray-linux-arm64-v8a.zip" ;; \
+        arm|armv7*|armhf) XRAY_ASSET="Xray-linux-arm32-v7a.zip" ;; \
         *) echo "Unsupported TARGETARCH=${ARCH} (set Docker --platform or use a supported arch)" >&2; exit 1 ;; \
     esac; \
     if [ -n "${XRAY_VERSION}" ]; then VER="${XRAY_VERSION}"; \
