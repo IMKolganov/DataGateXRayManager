@@ -20,6 +20,35 @@ public class XRayUserService(
         await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken);
     }
 
+    public async Task RehydrateRunningXrayFromStoreAsync(string dataDir, CancellationToken cancellationToken)
+    {
+        dataDir = Path.GetFullPath(dataDir);
+        var store = await LoadStoreAsync(dataDir, cancellationToken);
+        var active = store.Where(c => !c.IsRevoked).ToList();
+        if (active.Count == 0)
+        {
+            logger.LogInformation("Xray store rehydrate: no active clients in store.");
+            return;
+        }
+
+        logger.LogInformation("Xray store rehydrate: pushing {Count} client(s) to running Xray via adu.", active.Count);
+        foreach (var c in active)
+        {
+            try
+            {
+                var userJson = BuildAddUserJson(c.CommonName, c.Uuid, c.Flow ?? "");
+                await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken);
+                logger.LogInformation("Rehydrated Xray VLESS client {CommonName} (UUID={Uuid}).", c.CommonName, c.Uuid);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Rehydrate failed for {CommonName} (UUID={Uuid}); client may already exist or Xray API error.",
+                    c.CommonName, c.Uuid);
+            }
+        }
+    }
+
     public async Task<List<ServerCertificate>> GetAllCertificateInfoInIndexFileAsync(string dataDir,
         CancellationToken cancellationToken)
     {

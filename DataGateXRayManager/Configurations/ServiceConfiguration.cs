@@ -46,6 +46,7 @@ public static class ServiceConfiguration
         });
 
         services.AddHostedService<MicroserviceJwtValidatorInitializer>();
+        services.AddHostedService<XrayStoreRehydrateHostedService>();
 
         services.Configure<XRayManagementOptions>(config.GetSection("XRayManagement"));
         services.AddSingleton<XRayProcessApi>();
