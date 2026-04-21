@@ -14,9 +14,19 @@ write_plain() {
     "access": "$ACCESS_LOG",
     "error": "$ERROR_LOG"
   },
+  "stats": {},
   "api": {
     "tag": "api",
     "services": ["HandlerService", "LoggerService", "StatsService"]
+  },
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserUplink": true,
+        "statsUserDownlink": true,
+        "statsUserOnline": true
+      }
+    }
   },
   "inbounds": [
     {
@@ -80,9 +90,19 @@ write_tls() {
     "access": "$ACCESS_LOG",
     "error": "$ERROR_LOG"
   },
+  "stats": {},
   "api": {
     "tag": "api",
     "services": ["HandlerService", "LoggerService", "StatsService"]
+  },
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserUplink": true,
+        "statsUserDownlink": true,
+        "statsUserOnline": true
+      }
+    }
   },
   "inbounds": [
     {
@@ -167,7 +187,17 @@ write_reality() {
     --argjson sids "$sids_json" \
     '{
       log: { loglevel: "warning", access: $access, error: $error },
+      stats: {},
       api: { tag: "api", services: ["HandlerService", "LoggerService", "StatsService"] },
+      policy: {
+        levels: {
+          "0": {
+            statsUserUplink: true,
+            statsUserDownlink: true,
+            statsUserOnline: true
+          }
+        }
+      },
       inbounds: [
         {
           listen: $mhost,

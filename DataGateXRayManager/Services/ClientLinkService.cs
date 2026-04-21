@@ -17,14 +17,20 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
         if (string.IsNullOrEmpty(commonName) || string.IsNullOrEmpty(configTemplate))
             throw new ArgumentException("Common name and config template are required");
 
+        var (host, port) = NormalizeServerEndpoint(serverIp, serverPort);
+        if (host != serverIp || port != serverPort)
+            logger.LogWarning(
+                "Normalized Xray client endpoint (avoid host:port + separate port). Before {BeforeIp}:{BeforePort}, after {AfterIp}:{AfterPort}.",
+                serverIp, serverPort, host, port);
+
         logger.LogInformation("Creating XRay client + link file for {CommonName}", commonName);
         var certResult = await xRayUserService.BuildCertificateAsync(dataDir, cancellationToken, commonName, linkExpireDays);
 
         var linksDir = Path.Combine(dataDir, "xray", "links");
         Directory.CreateDirectory(linksDir);
 
-        var vlessUri = BuildVlessUriPlaceholder(configTemplate, certResult, serverIp, serverPort);
-        var content = GenerateLinkFile(configTemplate, friendlyName, serverIp, serverPort, certResult, vlessUri);
+        var vlessUri = BuildVlessUriPlaceholder(configTemplate, certResult, host, port);
+        var content = GenerateLinkFile(configTemplate, friendlyName, host, port, certResult, vlessUri);
 
         var ext = Path.GetExtension(configTemplate);
         if (string.IsNullOrEmpty(ext) || ext.Length > 8)
@@ -74,6 +80,36 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
 
         var content = await File.ReadAllBytesAsync(filePath, cancellationToken);
         return new ClientLinkDownload { FileName = fileName, Content = content };
+    }
+
+    /// <summary>
+    /// If <paramref name="serverIp"/> already contains <c>host:port</c> (e.g. DB mistake:
+    /// <c>dev-x1.example.com:30443</c> with <c>VpnServerPort</c> still 443), strip the inline port and use it so
+    /// URIs do not become <c>…@host:30443:443</c>.
+    /// </summary>
+    private static (string Host, int Port) NormalizeServerEndpoint(string serverIp, int serverPort)
+    {
+        serverIp = (serverIp ?? "").Trim();
+        if (serverIp.Length == 0)
+            return (serverIp, serverPort);
+
+        if (serverIp[0] == '[')
+        {
+            var end = serverIp.IndexOf(']', 1);
+            if (end > 1 && end < serverIp.Length - 2 && serverIp[end + 1] == ':'
+                && int.TryParse(serverIp.AsSpan(end + 2), out var p6) && p6 is > 0 and <= 65535)
+                return (serverIp[..(end + 1)], p6);
+            return (serverIp, serverPort);
+        }
+
+        if (serverIp.Count(c => c == ':') == 1)
+        {
+            var idx = serverIp.IndexOf(':');
+            if (idx > 0 && int.TryParse(serverIp.AsSpan(idx + 1), out var p) && p is > 0 and <= 65535)
+                return (serverIp[..idx], p);
+        }
+
+        return (serverIp, serverPort);
     }
 
     private static string BuildVlessUriPlaceholder(string template, ServerCertificate cert,

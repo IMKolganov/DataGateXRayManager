@@ -107,10 +107,14 @@ public class XRayProcessApi(
                 CreateNoWindow = true
             };
 
+            // xray-core parses `api <verb>` flags before positionals. If `-server` comes after `stdin:` or
+            // emails, Go's flag package stops at the first non-flag and treats `-server=…` as a config path
+            // (see inbound_user_add.go extractInboundsConfig / "failed to load %s").
             psi.ArgumentList.Add("api");
-            foreach (var segment in segments)
-                psi.ArgumentList.Add(segment);
+            psi.ArgumentList.Add(segments[0]);
             psi.ArgumentList.Add("-server=" + serverAddr);
+            for (var i = 1; i < segments.Count; i++)
+                psi.ArgumentList.Add(segments[i]);
 
             using var p = new Process { StartInfo = psi };
             p.Start();
