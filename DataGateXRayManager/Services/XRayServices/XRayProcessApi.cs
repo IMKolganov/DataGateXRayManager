@@ -81,49 +81,83 @@ public class XRayProcessApi(
         return RunApiCoreAsync(segments, stdinBody, cancellationToken);
     }
 
+    private static bool IsTransientXrayApiDialFailure(string stderr) =>
+        stderr.Contains("failed to dial", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("connection refused", StringComparison.OrdinalIgnoreCase);
+
     private async Task<string> RunApiCoreAsync(List<string> segments, string? stdinBody, CancellationToken cancellationToken)
     {
-        var serverAddr = $"{_api.Host}:{_api.Port}";
+        var host = string.IsNullOrWhiteSpace(_api.Host) ? "127.0.0.1" : _api.Host.Trim();
+        var serverAddr = $"{host}:{_api.Port}";
         var verb = segments.Count > 0 ? segments[0] : "";
 
-        var psi = new ProcessStartInfo
+        const int maxAttempts = 12;
+        const int delayMs = 400;
+        Exception? lastError = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            FileName = BinaryPath,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            RedirectStandardInput = stdinBody is not null,
-            CreateNoWindow = true
-        };
+            var psi = new ProcessStartInfo
+            {
+                FileName = BinaryPath,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = stdinBody is not null,
+                CreateNoWindow = true
+            };
 
-        psi.ArgumentList.Add("api");
-        foreach (var segment in segments)
-            psi.ArgumentList.Add(segment);
-        psi.ArgumentList.Add("-server=" + serverAddr);
+            psi.ArgumentList.Add("api");
+            foreach (var segment in segments)
+                psi.ArgumentList.Add(segment);
+            psi.ArgumentList.Add("-server=" + serverAddr);
 
-        using var p = new Process { StartInfo = psi };
-        p.Start();
+            using var p = new Process { StartInfo = psi };
+            p.Start();
 
-        if (stdinBody is not null)
-        {
-            await p.StandardInput.WriteAsync(stdinBody.AsMemory(), cancellationToken);
-            await p.StandardInput.FlushAsync(cancellationToken);
-            p.StandardInput.Close();
-        }
+            if (stdinBody is not null)
+            {
+                await p.StandardInput.WriteAsync(stdinBody.AsMemory(), cancellationToken);
+                await p.StandardInput.FlushAsync(cancellationToken);
+                p.StandardInput.Close();
+            }
 
-        var stdout = await p.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = await p.StandardError.ReadToEndAsync(cancellationToken);
-        await p.WaitForExitAsync(cancellationToken);
+            var stdout = await p.StandardOutput.ReadToEndAsync(cancellationToken);
+            var stderr = await p.StandardError.ReadToEndAsync(cancellationToken);
+            await p.WaitForExitAsync(cancellationToken);
 
-        var combined = string.Join(Environment.NewLine, new[] { stdout, stderr }.Where(s => !string.IsNullOrWhiteSpace(s)));
+            var combined = string.Join(Environment.NewLine,
+                new[] { stdout, stderr }.Where(s => !string.IsNullOrWhiteSpace(s)));
 
-        if (p.ExitCode != 0)
-        {
+            if (p.ExitCode == 0)
+            {
+                if (attempt > 1)
+                    logger.LogInformation("xray api succeeded on attempt {Attempt} (server {Server}).", attempt, serverAddr);
+                return FinishSuccessfulApiCallAsync(verb, combined, stdout, stderr);
+            }
+
             logger.LogWarning("xray api exited {Code}. stderr: {Err}", p.ExitCode, stderr);
-            throw new InvalidOperationException(
+            var err = new InvalidOperationException(
                 $"xray api failed ({p.ExitCode}): {stderr.Trim()} {stdout.Trim()}".Trim());
+            lastError = err;
+
+            if (attempt < maxAttempts && IsTransientXrayApiDialFailure(stderr))
+            {
+                logger.LogWarning(
+                    "xray api dial to {Server} failed (attempt {Attempt}/{Max}); retrying after {Delay}ms.",
+                    serverAddr, attempt, maxAttempts, delayMs);
+                await Task.Delay(delayMs, cancellationToken);
+                continue;
+            }
+
+            throw err;
         }
 
+        throw lastError ?? new InvalidOperationException("xray api failed with no error detail.");
+    }
+
+    private static string FinishSuccessfulApiCallAsync(string verb, string combined, string stdout, string stderr)
+    {
         if (verb.Equals("adu", StringComparison.OrdinalIgnoreCase)
             && combined.Contains("Added 0 user", StringComparison.Ordinal))
         {
@@ -144,3 +178,4 @@ public class XRayProcessApi(
         return string.IsNullOrWhiteSpace(result) ? combined.Trim() : result;
     }
 }
+

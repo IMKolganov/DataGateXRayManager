@@ -53,6 +53,16 @@ write_plain() {
       "tag": "direct"
     }
   ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["api"],
+        "outboundTag": "api"
+      }
+    ]
+  },
   "dns": {
     "servers": ["$DNS1", "$DNS2"]
   }
@@ -117,6 +127,16 @@ write_tls() {
       "tag": "direct"
     }
   ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["api"],
+        "outboundTag": "api"
+      }
+    ]
+  },
   "dns": {
     "servers": ["$DNS1", "$DNS2"]
   }
@@ -178,6 +198,12 @@ write_reality() {
         }
       ],
       outbounds: [ { protocol: "freedom", tag: "direct" } ],
+      routing: {
+        domainStrategy: "AsIs",
+        rules: [
+          { type: "field", inboundTag: ["api"], outboundTag: "api" }
+        ]
+      },
       dns: { servers: [$dns1, $dns2] }
     }' >"$CONFIG_PATH"
 }
