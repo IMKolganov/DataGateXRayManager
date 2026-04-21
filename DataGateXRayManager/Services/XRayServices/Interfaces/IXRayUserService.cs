@@ -13,4 +13,7 @@ public interface IXRayUserService
 
     Task<List<ServerCertificate>> GetAllCertificateInfoInIndexFileAsync(string dataDir,
         CancellationToken cancellationToken);
+
+    /// <summary>Removes the user from the live inbound via <c>xray api rmu</c> (connections may drop; user can be re-added with <c>adu</c>).</summary>
+    Task KickInboundUserAsync(string commonName, CancellationToken cancellationToken);
 }

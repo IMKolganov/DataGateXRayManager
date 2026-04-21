@@ -1,31 +1,64 @@
+using DataGateMonitor.SharedModels.DataGateXRayManager.XrayClients;
+using DataGateXRayManager.Helpers;
+using DataGateXRayManager.Services.Interfaces;
+using DataGateXRayManager.Services.XRayServices;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DataGateXRayManager.Controllers;
 
-/// <summary>
-/// Dashboard backend polls <c>GET {ApiUrl}/api/xray/clients</c> (see DataGateMonitor <c>XrayNodeApiClient</c>).
-/// Returns active sessions; currently empty until wired to Xray stats / inbounds.
-/// </summary>
 [ApiController]
 [Route("api/xray")]
-public sealed class XrayClientsController : ControllerBase
+public sealed class XrayClientsController(
+    IXRayActiveSessionsService activeSessionsService,
+    IXRayUserService xRayUserService,
+    IDataPathResolver dataPathResolver,
+    ILogger<XrayClientsController> logger)
+    : ControllerBase
 {
+    /// <summary>Dashboard backend polls this endpoint (see DataGateMonitor <c>XrayNodeApiClient</c>).</summary>
     [HttpGet("clients")]
-    public ActionResult<XrayClientsPayload> GetActiveClients() =>
-        Ok(new XrayClientsPayload { Clients = [] });
-}
+    public async Task<ActionResult<XrayClientsEnvelope>> GetActiveClients(CancellationToken cancellationToken)
+    {
+        var result = await activeSessionsService.GetActiveClientsAsync(cancellationToken);
+        return Ok(result);
+    }
 
-public sealed class XrayClientsPayload
-{
-    public List<XrayClientSessionDto> Clients { get; set; } = [];
-}
+    /// <summary>Immediately removes the user from the inbound (stops new handshakes; existing TCP sessions may linger briefly).</summary>
+    [HttpPost("clients/kick")]
+    public async Task<ActionResult> KickUser([FromBody] XrayCommonNameRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.CommonName))
+            return BadRequest(new { error = "commonName is required" });
+        try
+        {
+            await xRayUserService.KickInboundUserAsync(request.CommonName.Trim(), cancellationToken);
+            return Ok(new { ok = true });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Kick user failed for {CommonName}", request.CommonName);
+            return BadRequest(new { error = ex.Message });
+        }
+    }
 
-public sealed class XrayClientSessionDto
-{
-    public string Email { get; set; } = string.Empty;
-    public string RemoteAddress { get; set; } = string.Empty;
-    public string? Username { get; set; }
-    public long BytesReceived { get; set; }
-    public long BytesSent { get; set; }
-    public DateTimeOffset ConnectedSince { get; set; }
+    /// <summary>Revokes the client in the local store and removes them from the inbound (same as client-link revoke).</summary>
+    [HttpPost("users/disable")]
+    public async Task<ActionResult> DisableUser([FromBody] XrayCommonNameRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.CommonName))
+            return BadRequest(new { error = "commonName is required" });
+        try
+        {
+            var dataDir = dataPathResolver.GetDataPath();
+            await xRayUserService.RevokeCertificateAsync(dataDir, request.CommonName.Trim(), cancellationToken);
+            return Ok(new { ok = true });
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Disable user failed for {CommonName}", request.CommonName);
+            return BadRequest(new { error = ex.Message });
+        }
+    }
 }

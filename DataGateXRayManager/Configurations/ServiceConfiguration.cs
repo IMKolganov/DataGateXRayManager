@@ -15,6 +15,7 @@ public static class ServiceConfiguration
         services.AddScoped<IClientLinkService, ClientLinkService>();
 
         services.AddScoped<IXRayUserService, XRayUserService>();
+        services.AddScoped<IXRayActiveSessionsService, XRayActiveSessionsService>();
 
         services.AddRateLimiter(options =>
         {

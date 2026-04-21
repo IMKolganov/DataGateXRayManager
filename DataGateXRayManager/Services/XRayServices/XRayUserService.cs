@@ -15,6 +15,11 @@ public class XRayUserService(
 
     private string DefaultFlow => configuration["XRay:DefaultClientFlow"] ?? "";
 
+    public async Task KickInboundUserAsync(string commonName, CancellationToken cancellationToken)
+    {
+        await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken);
+    }
+
     public async Task<List<ServerCertificate>> GetAllCertificateInfoInIndexFileAsync(string dataDir,
         CancellationToken cancellationToken)
     {
@@ -41,7 +46,7 @@ public class XRayUserService(
         };
 
         var userJson = BuildAddUserJson(commonName, uuid, flow);
-        await xrayApi.RunApiAsync("adu", userJson, cancellationToken);
+        await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken);
 
         store.Add(client);
         await SaveStoreAsync(dataDir, store, cancellationToken);
@@ -60,12 +65,7 @@ public class XRayUserService(
         if (client is null)
             throw new InvalidOperationException($"Client '{commonName}' not found.");
 
-        var removeJson = new JObject
-        {
-            ["inboundTag"] = InboundTag,
-            ["email"] = commonName
-        }.ToString(Newtonsoft.Json.Formatting.None);
-        await xrayApi.RunApiAsync("rmu", removeJson, cancellationToken);
+        await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken);
 
         client.IsRevoked = true;
         client.RevokedUtc = DateTime.UtcNow;
@@ -82,6 +82,10 @@ public class XRayUserService(
         };
     }
 
+    /// <summary>
+    /// JSON for <c>xray api adu stdin:</c>: must deserialize to an Xray config root with <c>inbounds</c>
+    /// (see xray-core <c>extractInboundsConfig</c> / <c>inbound_user_add.go</c>). Each new VLESS client must have non-empty <c>email</c>.
+    /// </summary>
     private string BuildAddUserJson(string email, string uuid, string flow)
     {
         var template = configuration["XRay:AduUserJsonTemplate"];
@@ -94,23 +98,29 @@ public class XRayUserService(
                 .Replace("{{flow}}", flow ?? "", StringComparison.Ordinal);
         }
 
-        // Default payload for VLESS (HandlerService AddUser): matches current Xray-core VLESS account shape.
-        var account = new JObject { ["id"] = uuid };
-        if (!string.IsNullOrWhiteSpace(flow))
-            account["flow"] = flow;
-
-        var user = new JObject
+        var client = new JObject
         {
+            ["id"] = uuid,
             ["email"] = email,
-            ["level"] = 0,
-            ["account"] = account
+            ["level"] = 0
+        };
+        if (!string.IsNullOrWhiteSpace(flow))
+            client["flow"] = flow;
+
+        var inbound = new JObject
+        {
+            ["tag"] = InboundTag,
+            ["listen"] = "0.0.0.0",
+            ["port"] = 1,
+            ["protocol"] = "vless",
+            ["settings"] = new JObject
+            {
+                ["decryption"] = "none",
+                ["clients"] = new JArray { client }
+            }
         };
 
-        var root = new JObject
-        {
-            ["inboundTag"] = InboundTag,
-            ["user"] = user
-        };
+        var root = new JObject { ["inbounds"] = new JArray { inbound } };
         return root.ToString(Newtonsoft.Json.Formatting.None);
     }
 
