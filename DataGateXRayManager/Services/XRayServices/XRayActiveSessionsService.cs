@@ -8,6 +8,9 @@ namespace DataGateXRayManager.Services.XRayServices;
 /// Polls Xray-core CLI for online VLESS clients. Prefers <c>statsonlineiplist -all -include-traffic</c> (recent cores);
 /// falls back to <c>-all</c> only, then to <c>statsgetallonlineusers</c> plus per-email <c>statsonlineiplist -email …</c>
 /// for older binaries whose <c>statsonlineiplist</c> only documents <c>-email</c>.
+/// When JSON has no traffic (e.g. core without <c>-include-traffic</c>), fills bytes via <c>xray api stats -name …</c>
+/// using standard user traffic counter names (see Xray stats documentation).
+/// if user-level stats are enabled in the Xray config.
 /// </summary>
 public sealed class XRayActiveSessionsService(XRayProcessApi xrayApi, ILogger<XRayActiveSessionsService> logger)
     : IXRayActiveSessionsService
@@ -38,7 +41,9 @@ public sealed class XRayActiveSessionsService(XRayProcessApi xrayApi, ILogger<XR
         {
             var stdout = await xrayApi.RunApiVerbAsync(["statsonlineiplist", "-all", "-include-traffic"], null,
                 cancellationToken);
-            return ParseGetUsersStats(stdout);
+            var withTraffic = ParseGetUsersStats(stdout);
+            await EnrichZeroTrafficFromUserStatCountersAsync(withTraffic, cancellationToken);
+            return withTraffic;
         }
         catch (InvalidOperationException ex)
         {
@@ -60,7 +65,9 @@ public sealed class XRayActiveSessionsService(XRayProcessApi xrayApi, ILogger<XR
         try
         {
             var stdout = await xrayApi.RunApiVerbAsync(["statsonlineiplist", "-all"], null, cancellationToken);
-            return ParseGetUsersStats(stdout);
+            var withoutTraffic = ParseGetUsersStats(stdout);
+            await EnrichZeroTrafficFromUserStatCountersAsync(withoutTraffic, cancellationToken);
+            return withoutTraffic;
         }
         catch (InvalidOperationException ex)
         {
@@ -111,7 +118,69 @@ public sealed class XRayActiveSessionsService(XRayProcessApi xrayApi, ILogger<XR
             }
         }
 
+        await EnrichZeroTrafficFromUserStatCountersAsync(list, cancellationToken);
         return list;
+    }
+
+    /// <summary>
+    /// Per-user traffic is absent from <c>statsonlineiplist -email</c> and from <c>-all</c> without <c>-include-traffic</c>.
+    /// Reads Xray user-level counters (requires stats / policy in config — see Project X docs).
+    /// </summary>
+    private async Task EnrichZeroTrafficFromUserStatCountersAsync(List<XrayClientSessionDto> list,
+        CancellationToken cancellationToken)
+    {
+        foreach (var c in list)
+        {
+            if (c.BytesReceived != 0 || c.BytesSent != 0)
+                continue;
+
+            var email = c.Email?.Trim();
+            if (string.IsNullOrEmpty(email))
+                continue;
+
+            try
+            {
+                var uplinkName = $"user>>>{email}>>>traffic>>>uplink";
+                var downlinkName = $"user>>>{email}>>>traffic>>>downlink";
+                var upOut =
+                    await xrayApi.RunApiVerbAsync(["stats", "-name", uplinkName], null, cancellationToken);
+                var downOut =
+                    await xrayApi.RunApiVerbAsync(["stats", "-name", downlinkName], null, cancellationToken);
+                c.BytesReceived = ParseStatsCounterValue(upOut);
+                c.BytesSent = ParseStatsCounterValue(downOut);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex,
+                    "xray api stats counters missing or failed for {Email} (enable user stats in Xray config if you need traffic here)",
+                    email);
+            }
+        }
+    }
+
+    /// <summary>Parses <c>GetStatsResponse</c> JSON from <c>xray api stats</c>.</summary>
+    private static long ParseStatsCounterValue(string stdout)
+    {
+        if (string.IsNullOrWhiteSpace(stdout))
+            return 0;
+
+        var root = JObject.Parse(stdout);
+        var stat = root["stat"] ?? root["Stat"];
+        if (stat is null || stat.Type == JTokenType.Null)
+            return 0;
+
+        var v = stat["value"] ?? stat["Value"];
+        if (v is null || v.Type == JTokenType.Null)
+            return 0;
+
+        if (v.Type == JTokenType.Integer || v.Type == JTokenType.Float)
+            return v.Value<long>();
+
+        if (v.Type == JTokenType.String && long.TryParse(v.Value<string>(), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var parsed))
+            return parsed;
+
+        return 0;
     }
 
     /// <summary>Parses <c>GetAllOnlineUsersResponse</c>: <c>{"users":["user>>>cn@host>>>online", ...]}</c>.</summary>
