@@ -23,7 +23,10 @@ public sealed class XrayClientsController(
         return Ok(result);
     }
 
-    /// <summary>Immediately removes the user from the inbound (stops new handshakes; existing TCP sessions may linger briefly).</summary>
+    /// <summary>
+    /// Drops live sessions via <c>rmu</c>, then if the client still exists in <c>clients.store.json</c>, re-applies <c>adu</c>
+    /// so the same profile can connect again (otherwise only <c>rmu</c> would leave the UUID unknown until restart/rehydrate).
+    /// </summary>
     [HttpPost("clients/kick")]
     public async Task<ActionResult> KickUser([FromBody] XrayCommonNameRequest request,
         CancellationToken cancellationToken)

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DataGateXRayManager.Helpers;
 using Newtonsoft.Json.Linq;
 using DataGateMonitor.SharedModels.DataGateXRayManager.Cert.Responses;
 
@@ -6,6 +7,7 @@ namespace DataGateXRayManager.Services.XRayServices;
 
 public class XRayUserService(
     IConfiguration configuration,
+    IDataPathResolver dataPathResolver,
     XRayProcessApi xrayApi,
     ILogger<XRayUserService> logger) : IXRayUserService
 {
@@ -18,6 +20,19 @@ public class XRayUserService(
     public async Task KickInboundUserAsync(string commonName, CancellationToken cancellationToken)
     {
         await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken);
+
+        // rmu drops the user from the running inbound only; clients.store.json still lists them. Without a
+        // follow-up adu, reconnects fail (unknown UUID). Re-push active store rows so "kick" = drop session, keep credential.
+        var dataDir = Path.GetFullPath(dataPathResolver.GetDataPath());
+        var store = await LoadStoreAsync(dataDir, cancellationToken);
+        var client = store.FirstOrDefault(c =>
+            !c.IsRevoked && string.Equals(c.CommonName, commonName, StringComparison.OrdinalIgnoreCase));
+        if (client is null)
+            return;
+
+        var userJson = BuildAddUserJson(client.CommonName, client.Uuid, client.Flow ?? "");
+        await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken);
+        logger.LogInformation("Kick: re-added {CommonName} to running Xray after rmu.", commonName);
     }
 
     public async Task RehydrateRunningXrayFromStoreAsync(string dataDir, CancellationToken cancellationToken)
