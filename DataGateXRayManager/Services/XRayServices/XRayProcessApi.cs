@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using DataGateXRayManager.Models;
+using DataGateMonitor.SharedModels.DataGateXRayManager.Models;
 using Microsoft.Extensions.Options;
 
 namespace DataGateXRayManager.Services.XRayServices;

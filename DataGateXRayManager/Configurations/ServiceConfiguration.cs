@@ -1,6 +1,6 @@
 using System.Threading.RateLimiting;
 using DataGateXRayManager.Helpers;
-using DataGateXRayManager.Models;
+using DataGateMonitor.SharedModels.DataGateXRayManager.Models;
 using DataGateXRayManager.Services;
 using DataGateXRayManager.Services.Interfaces;
 using DataGateXRayManager.Services.Proxy;

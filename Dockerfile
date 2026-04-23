@@ -4,7 +4,6 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 
 WORKDIR /src
-COPY ["DataGateMonitor.SharedModels.DataGateXRayManager/DataGateMonitor.SharedModels.DataGateXRayManager.csproj", "DataGateMonitor.SharedModels.DataGateXRayManager/"]
 COPY ["DataGateXRayManager/DataGateXRayManager.csproj", "DataGateXRayManager/"]
 WORKDIR /src/DataGateXRayManager
 RUN dotnet restore "DataGateXRayManager.csproj"
