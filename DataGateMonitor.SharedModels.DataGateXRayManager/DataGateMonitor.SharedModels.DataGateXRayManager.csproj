@@ -6,9 +6,9 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <RootNamespace>DataGateMonitor.SharedModels</RootNamespace>
         <AssemblyName>DataGateMonitor.SharedModels.DataGateXRayManager</AssemblyName>
-        <Version>1.0.3.16</Version>
-        <AssemblyVersion>1.0.3.16</AssemblyVersion>
-        <FileVersion>1.0.3.16</FileVersion>
+        <Version>1.0.3.17</Version>
+        <AssemblyVersion>1.0.3.17</AssemblyVersion>
+        <FileVersion>1.0.3.17</FileVersion>
     </PropertyGroup>
 
 </Project>

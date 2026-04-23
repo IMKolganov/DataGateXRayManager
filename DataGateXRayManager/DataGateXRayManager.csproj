@@ -5,9 +5,9 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <RootNamespace>DataGateXRayManager</RootNamespace>
-        <Version>1.0.3.16</Version>
-        <AssemblyVersion>1.0.3.16</AssemblyVersion>
-        <FileVersion>1.0.3.16</FileVersion>
+        <Version>1.0.3.17</Version>
+        <AssemblyVersion>1.0.3.17</AssemblyVersion>
+        <FileVersion>1.0.3.17</FileVersion>
     </PropertyGroup>
 
     <!-- Shared API DTOs: separate assembly (same idea as the DataGateMonitor.SharedModels NuGet package). -->
