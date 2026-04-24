@@ -1,4 +1,5 @@
 using System.Text.Json;
+using DataGateXRayManager.Helpers;
 using Newtonsoft.Json.Linq;
 using DataGateMonitor.SharedModels.DataGateXRayManager.Cert.Responses;
 
@@ -6,6 +7,7 @@ namespace DataGateXRayManager.Services.XRayServices;
 
 public class XRayUserService(
     IConfiguration configuration,
+    IDataPathResolver dataPathResolver,
     XRayProcessApi xrayApi,
     ILogger<XRayUserService> logger) : IXRayUserService
 {
@@ -14,6 +16,53 @@ public class XRayUserService(
     private string InboundTag => configuration["XRay:InboundTag"] ?? "vless-in";
 
     private string DefaultFlow => configuration["XRay:DefaultClientFlow"] ?? "";
+
+    public async Task KickInboundUserAsync(string commonName, CancellationToken cancellationToken)
+    {
+        await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken);
+
+        // rmu drops the user from the running inbound only; clients.store.json still lists them. Without a
+        // follow-up adu, reconnects fail (unknown UUID). Re-push active store rows so "kick" = drop session, keep credential.
+        var dataDir = Path.GetFullPath(dataPathResolver.GetDataPath());
+        var store = await LoadStoreAsync(dataDir, cancellationToken);
+        var client = store.FirstOrDefault(c =>
+            !c.IsRevoked && string.Equals(c.CommonName, commonName, StringComparison.OrdinalIgnoreCase));
+        if (client is null)
+            return;
+
+        var userJson = BuildAddUserJson(client.CommonName, client.Uuid, client.Flow ?? "");
+        await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken);
+        logger.LogInformation("Kick: re-added {CommonName} to running Xray after rmu.", commonName);
+    }
+
+    public async Task RehydrateRunningXrayFromStoreAsync(string dataDir, CancellationToken cancellationToken)
+    {
+        dataDir = Path.GetFullPath(dataDir);
+        var store = await LoadStoreAsync(dataDir, cancellationToken);
+        var active = store.Where(c => !c.IsRevoked).ToList();
+        if (active.Count == 0)
+        {
+            logger.LogInformation("Xray store rehydrate: no active clients in store.");
+            return;
+        }
+
+        logger.LogInformation("Xray store rehydrate: pushing {Count} client(s) to running Xray via adu.", active.Count);
+        foreach (var c in active)
+        {
+            try
+            {
+                var userJson = BuildAddUserJson(c.CommonName, c.Uuid, c.Flow ?? "");
+                await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken);
+                logger.LogInformation("Rehydrated Xray VLESS client {CommonName} (UUID={Uuid}).", c.CommonName, c.Uuid);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Rehydrate failed for {CommonName} (UUID={Uuid}); client may already exist or Xray API error.",
+                    c.CommonName, c.Uuid);
+            }
+        }
+    }
 
     public async Task<List<ServerCertificate>> GetAllCertificateInfoInIndexFileAsync(string dataDir,
         CancellationToken cancellationToken)
@@ -41,7 +90,7 @@ public class XRayUserService(
         };
 
         var userJson = BuildAddUserJson(commonName, uuid, flow);
-        await xrayApi.RunApiAsync("adu", userJson, cancellationToken);
+        await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken);
 
         store.Add(client);
         await SaveStoreAsync(dataDir, store, cancellationToken);
@@ -60,12 +109,7 @@ public class XRayUserService(
         if (client is null)
             throw new InvalidOperationException($"Client '{commonName}' not found.");
 
-        var removeJson = new JObject
-        {
-            ["inboundTag"] = InboundTag,
-            ["email"] = commonName
-        }.ToString(Newtonsoft.Json.Formatting.None);
-        await xrayApi.RunApiAsync("rmu", removeJson, cancellationToken);
+        await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken);
 
         client.IsRevoked = true;
         client.RevokedUtc = DateTime.UtcNow;
@@ -82,6 +126,10 @@ public class XRayUserService(
         };
     }
 
+    /// <summary>
+    /// JSON for <c>xray api adu stdin:</c>: must deserialize to an Xray config root with <c>inbounds</c>
+    /// (see xray-core <c>extractInboundsConfig</c> / <c>inbound_user_add.go</c>). Each new VLESS client must have non-empty <c>email</c>.
+    /// </summary>
     private string BuildAddUserJson(string email, string uuid, string flow)
     {
         var template = configuration["XRay:AduUserJsonTemplate"];
@@ -94,23 +142,29 @@ public class XRayUserService(
                 .Replace("{{flow}}", flow ?? "", StringComparison.Ordinal);
         }
 
-        // Default payload for VLESS (HandlerService AddUser): matches current Xray-core VLESS account shape.
-        var account = new JObject { ["id"] = uuid };
-        if (!string.IsNullOrWhiteSpace(flow))
-            account["flow"] = flow;
-
-        var user = new JObject
+        var client = new JObject
         {
+            ["id"] = uuid,
             ["email"] = email,
-            ["level"] = 0,
-            ["account"] = account
+            ["level"] = 0
+        };
+        if (!string.IsNullOrWhiteSpace(flow))
+            client["flow"] = flow;
+
+        var inbound = new JObject
+        {
+            ["tag"] = InboundTag,
+            ["listen"] = "0.0.0.0",
+            ["port"] = 1,
+            ["protocol"] = "vless",
+            ["settings"] = new JObject
+            {
+                ["decryption"] = "none",
+                ["clients"] = new JArray { client }
+            }
         };
 
-        var root = new JObject
-        {
-            ["inboundTag"] = InboundTag,
-            ["user"] = user
-        };
+        var root = new JObject { ["inbounds"] = new JArray { inbound } };
         return root.ToString(Newtonsoft.Json.Formatting.None);
     }
 

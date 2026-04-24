@@ -1,6 +1,6 @@
 using System.Threading.RateLimiting;
 using DataGateXRayManager.Helpers;
-using DataGateXRayManager.Models;
+using DataGateMonitor.SharedModels.DataGateXRayManager.Models;
 using DataGateXRayManager.Services;
 using DataGateXRayManager.Services.Interfaces;
 using DataGateXRayManager.Services.Proxy;
@@ -15,6 +15,7 @@ public static class ServiceConfiguration
         services.AddScoped<IClientLinkService, ClientLinkService>();
 
         services.AddScoped<IXRayUserService, XRayUserService>();
+        services.AddScoped<IXRayActiveSessionsService, XRayActiveSessionsService>();
 
         services.AddRateLimiter(options =>
         {
@@ -45,6 +46,7 @@ public static class ServiceConfiguration
         });
 
         services.AddHostedService<MicroserviceJwtValidatorInitializer>();
+        services.AddHostedService<XrayStoreRehydrateHostedService>();
 
         services.Configure<XRayManagementOptions>(config.GetSection("XRayManagement"));
         services.AddSingleton<XRayProcessApi>();

@@ -13,12 +13,12 @@ public class IndexController(
     : ControllerBase
 {
     [HttpGet]
-    public Task<ActionResult<RootInfoResponse>> Get(CancellationToken cancellationToken)
+    public Task<ActionResult<RootXrayInfoResponse>> Get(CancellationToken cancellationToken)
     {
         try
         {
             var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "Unknown version";
-            var response = new RootInfoResponse
+            var response = new RootXrayInfoResponse
             {
                 Version = version,
                 Environment = env.EnvironmentName,
@@ -44,12 +44,12 @@ public class IndexController(
                     BackendBaseUrl = config["Backend:BaseUrl"]
                 }
             };
-            return Task.FromResult<ActionResult<RootInfoResponse>>(Ok(response));
+            return Task.FromResult<ActionResult<RootXrayInfoResponse>>(Ok(response));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error getting info");
-            return Task.FromResult<ActionResult<RootInfoResponse>>(BadRequest(new { error = ex.Message }));
+            return Task.FromResult<ActionResult<RootXrayInfoResponse>>(BadRequest(new { error = ex.Message }));
         }
     }
 }

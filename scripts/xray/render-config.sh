@@ -14,9 +14,19 @@ write_plain() {
     "access": "$ACCESS_LOG",
     "error": "$ERROR_LOG"
   },
+  "stats": {},
   "api": {
     "tag": "api",
     "services": ["HandlerService", "LoggerService", "StatsService"]
+  },
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserUplink": true,
+        "statsUserDownlink": true,
+        "statsUserOnline": true
+      }
+    }
   },
   "inbounds": [
     {
@@ -53,6 +63,16 @@ write_plain() {
       "tag": "direct"
     }
   ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["api"],
+        "outboundTag": "api"
+      }
+    ]
+  },
   "dns": {
     "servers": ["$DNS1", "$DNS2"]
   }
@@ -70,9 +90,19 @@ write_tls() {
     "access": "$ACCESS_LOG",
     "error": "$ERROR_LOG"
   },
+  "stats": {},
   "api": {
     "tag": "api",
     "services": ["HandlerService", "LoggerService", "StatsService"]
+  },
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserUplink": true,
+        "statsUserDownlink": true,
+        "statsUserOnline": true
+      }
+    }
   },
   "inbounds": [
     {
@@ -117,6 +147,16 @@ write_tls() {
       "tag": "direct"
     }
   ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": ["api"],
+        "outboundTag": "api"
+      }
+    ]
+  },
   "dns": {
     "servers": ["$DNS1", "$DNS2"]
   }
@@ -147,7 +187,17 @@ write_reality() {
     --argjson sids "$sids_json" \
     '{
       log: { loglevel: "warning", access: $access, error: $error },
+      stats: {},
       api: { tag: "api", services: ["HandlerService", "LoggerService", "StatsService"] },
+      policy: {
+        levels: {
+          "0": {
+            statsUserUplink: true,
+            statsUserDownlink: true,
+            statsUserOnline: true
+          }
+        }
+      },
       inbounds: [
         {
           listen: $mhost,
@@ -178,6 +228,12 @@ write_reality() {
         }
       ],
       outbounds: [ { protocol: "freedom", tag: "direct" } ],
+      routing: {
+        domainStrategy: "AsIs",
+        rules: [
+          { type: "field", inboundTag: ["api"], outboundTag: "api" }
+        ]
+      },
       dns: { servers: [$dns1, $dns2] }
     }' >"$CONFIG_PATH"
 }
@@ -186,6 +242,11 @@ main() {
   if [ -n "${XRAY_EXTERNAL_CONFIG_PATH:-}" ] && [ -f "$XRAY_EXTERNAL_CONFIG_PATH" ]; then
     echo "[xray-config] Using external config: $XRAY_EXTERNAL_CONFIG_PATH"
     cp -f "$XRAY_EXTERNAL_CONFIG_PATH" "$CONFIG_PATH"
+    # Built-in templates always set stats + policy; external configs often omit them → dashboard traffic stays 0.
+    if command -v jq >/dev/null 2>&1 \
+      && ! jq -e '.stats != null and .policy != null and (.policy.levels["0"].statsUserUplink == true) and (.policy.levels["0"].statsUserDownlink == true)' "$CONFIG_PATH" >/dev/null 2>&1; then
+      echo "[xray-config] WARNING: external config is missing stats/policy user counters (see write_plain in this script: stats {}, policy.levels[\"0\"] statsUserUplink/Downlink/Online, api.services StatsService) — bytes in the UI may stay 0." >&2
+    fi
     return 0
   fi
 

@@ -44,6 +44,29 @@ xray run -config "$CONFIG_PATH" &
 XRAY_PID=$!
 trap 'kill $XRAY_PID 2>/dev/null || true' EXIT
 
+# Avoid race: DataGateXRayManager calls `xray api` against XRayManagement__Host:Port (default 127.0.0.1:10085).
+echo "[entrypoint] Waiting for Xray API ${XRAY_MGMT_HOST}:${XRAY_MGMT_PORT}..."
+wait_timeout=30
+wait_elapsed=0
+while true; do
+  if bash -c "echo > /dev/tcp/${XRAY_MGMT_HOST}/${XRAY_MGMT_PORT}" 2>/dev/null; then
+    echo "[entrypoint] Xray API port is open."
+    break
+  fi
+  if [ "$wait_elapsed" -ge "$wait_timeout" ]; then
+    echo "[entrypoint] WARNING: Xray API did not open within ${wait_timeout}s; manager may log dial errors until ready."
+    break
+  fi
+  sleep 1
+  wait_elapsed=$((wait_elapsed + 1))
+done
+
+if ! kill -0 "$XRAY_PID" 2>/dev/null; then
+  echo "[entrypoint] ERROR: Xray process (pid $XRAY_PID) exited before manager start. Check $ERROR_LOG"
+  wait "$XRAY_PID" 2>/dev/null || true
+  exit 1
+fi
+
 echo "[entrypoint] Waiting for .NET artifacts..."
 timeout=30
 elapsed=0
