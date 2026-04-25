@@ -1,11 +1,13 @@
+using System.Net;
 using DataGateXRayManager.Services.Interfaces;
 using DataGateXRayManager.Services.XRayServices;
 using DataGateMonitor.SharedModels.DataGateXRayManager.Cert.Responses;
 using DataGateMonitor.SharedModels.DataGateXRayManager.ClientLink.Responses;
+using Microsoft.Extensions.Configuration;
 
 namespace DataGateXRayManager.Services;
 
-public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserService xRayUserService)
+public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserService xRayUserService, IConfiguration configuration)
     : IClientLinkService
 {
     public async Task<ClientLinkMetadata> AddClientLink(string dataDir, string commonName, string friendlyName,
@@ -29,7 +31,7 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
         var linksDir = Path.Combine(dataDir, "xray", "links");
         Directory.CreateDirectory(linksDir);
 
-        var vlessUri = BuildVlessUriPlaceholder(configTemplate, certResult, host, port);
+        var vlessUri = BuildVlessUriPlaceholder(configTemplate, certResult, host, port, friendlyName);
         var content = GenerateLinkFile(configTemplate, friendlyName, host, port, certResult, vlessUri);
 
         var ext = Path.GetExtension(configTemplate);
@@ -112,13 +114,89 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
         return (serverIp, serverPort);
     }
 
-    private static string BuildVlessUriPlaceholder(string template, ServerCertificate cert,
-        string serverIp, int serverPort)
+    private string BuildVlessUriPlaceholder(string template, ServerCertificate cert,
+        string serverIp, int serverPort, string friendlyName)
     {
         if (!template.Contains("{{vless_uri}}", StringComparison.Ordinal))
             return "";
-        return
-            $"vless://{cert.SerialNumber}@{serverIp}:{serverPort}?encryption=none&type=tcp#client";
+        var normalizedFriendlyName = (friendlyName ?? string.Empty).Trim();
+        var serverNameOnly = normalizedFriendlyName.Split('[')[0].Trim();
+        var labelBase = string.IsNullOrWhiteSpace(serverNameOnly) ? "DataGate" : $"DataGate {serverNameOnly}";
+        var label = labelBase.Replace(" ", "+", StringComparison.Ordinal);
+        var uuid = cert.SerialNumber;
+        var transportMode = ResolveTransportMode();
+        return transportMode switch
+        {
+            "tls" => BuildVlessTlsUri(uuid, serverIp, serverPort, label),
+            "reality" => BuildVlessRealityUriPlaceholder(uuid, serverIp, serverPort, label),
+            _ => $"vless://{uuid}@{serverIp}:{serverPort}?encryption=none&type=tcp#{label}"
+        };
+    }
+
+    /// <summary>Matches <c>XRAY_TRANSPORT_MODE</c> in <c>entrypoint.sh</c> / Docker (plain | tls | reality).</summary>
+    private string ResolveTransportMode()
+    {
+        var raw = configuration["XRAY_TRANSPORT_MODE"]
+                  ?? Environment.GetEnvironmentVariable("XRAY_TRANSPORT_MODE")
+                  ?? "plain";
+        raw = raw.Trim().ToLowerInvariant();
+        return raw switch
+        {
+            "tcp" or "none" => "plain",
+            _ => raw
+        };
+    }
+
+    /// <summary>Public hostname for TLS SNI when <paramref name="serverHost"/> is an IP (e.g. from DB). Docker: <c>XRAY__DOMAIN</c>.</summary>
+    private string? ResolveTlsSniHost(string serverHost)
+    {
+        var fromConfig = configuration["XRAY:DOMAIN"]
+                         ?? configuration["XRay:Domain"]
+                         ?? Environment.GetEnvironmentVariable("XRAY__DOMAIN");
+        if (!string.IsNullOrWhiteSpace(fromConfig))
+            return fromConfig.Trim();
+
+        var host = (serverHost ?? "").Trim();
+        if (host.Length == 0 || IsIpLiteral(host))
+            return null;
+        // Strip brackets for IPv6 display host — if not IP, use as SNI
+        return host.TrimStart('[').Split(']')[0];
+    }
+
+    private string BuildVlessTlsUri(string uuid, string serverHost, int serverPort, string fragmentLabel)
+    {
+        var sniFromConfig = ResolveTlsSniHost(serverHost);
+        var sni = sniFromConfig ?? serverHost.Trim();
+        if (IsIpLiteral(serverHost) && sniFromConfig == null)
+        {
+            logger.LogWarning(
+                "XRAY_TRANSPORT_MODE=tls but server endpoint is IP {Host} and no XRAY__DOMAIN / XRAY:Domain is set; using IP as SNI (certificate validation may fail on clients).",
+                serverHost);
+        }
+
+        var query =
+            $"encryption=none&security=tls&sni={Uri.EscapeDataString(sni)}&type=tcp";
+        return $"vless://{uuid}@{serverHost}:{serverPort}?{query}#{fragmentLabel}";
+    }
+
+    private string BuildVlessRealityUriPlaceholder(string uuid, string serverHost, int serverPort, string fragmentLabel)
+    {
+        logger.LogWarning(
+            "XRAY_TRANSPORT_MODE=reality: share URI is not auto-generated with Reality params (pbk/sid); clients need a matching Reality profile. Falling back to plain-style URI (likely invalid for Reality inbound).");
+        return $"vless://{uuid}@{serverHost}:{serverPort}?encryption=none&type=tcp#{fragmentLabel}";
+    }
+
+    private static bool IsIpLiteral(string host)
+    {
+        var h = host.Trim();
+        if (h.Length >= 2 && h[0] == '[')
+        {
+            var end = h.IndexOf(']', 1);
+            if (end > 1)
+                h = h[1..end];
+        }
+
+        return IPAddress.TryParse(h, out _);
     }
 
     private static string GenerateLinkFile(
