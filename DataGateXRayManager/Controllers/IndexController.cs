@@ -1,5 +1,6 @@
 using System.Reflection;
 using DataGateMonitor.SharedModels.DataGateXRayManager.Info;
+using DataGateMonitor.SharedModels.Responses;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DataGateXRayManager.Controllers;
@@ -13,7 +14,7 @@ public class IndexController(
     : ControllerBase
 {
     [HttpGet]
-    public Task<ActionResult<RootXrayInfoResponse>> Get(CancellationToken cancellationToken)
+    public Task<ActionResult<ApiResponse<RootXrayInfoResponse>>> Get(CancellationToken cancellationToken)
     {
         try
         {
@@ -44,12 +45,14 @@ public class IndexController(
                     BackendBaseUrl = config["Backend:BaseUrl"]
                 }
             };
-            return Task.FromResult<ActionResult<RootXrayInfoResponse>>(Ok(response));
+            return Task.FromResult<ActionResult<ApiResponse<RootXrayInfoResponse>>>(
+                Ok(ApiResponse<RootXrayInfoResponse>.SuccessResponse(response)));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error getting info");
-            return Task.FromResult<ActionResult<RootXrayInfoResponse>>(BadRequest(new { error = ex.Message }));
+            return Task.FromResult<ActionResult<ApiResponse<RootXrayInfoResponse>>>(
+                BadRequest(ApiResponse<RootXrayInfoResponse>.ErrorResponse(ex.Message)));
         }
     }
 }

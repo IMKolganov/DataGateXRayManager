@@ -1,6 +1,7 @@
 using DataGateXRayManager.Helpers;
 using DataGateMonitor.SharedModels.DataGateXRayManager.ClientLink.Requests;
 using DataGateMonitor.SharedModels.DataGateXRayManager.ClientLink.Responses;
+using DataGateMonitor.SharedModels.Responses;
 using DataGateXRayManager.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -15,7 +16,7 @@ public class ClientLinkController(
     : ControllerBase
 {
     [HttpPost("add")]
-    public async Task<ActionResult<ClientLinkMetadata>> Add([FromBody] GenerateClientLinkRequest request,
+    public async Task<ActionResult<ApiResponse<ClientLinkMetadata>>> Add([FromBody] GenerateClientLinkRequest request,
         CancellationToken cancellationToken)
     {
         try
@@ -36,17 +37,17 @@ public class ClientLinkController(
                 request.IssuedTo,
                 request.LinkExpireDays);
 
-            return Ok(result);
+            return Ok(ApiResponse<ClientLinkMetadata>.SuccessResponse(result));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error adding client link file for {CommonName}", request.CommonName);
-            return BadRequest(new { error = ex.Message });
+            return BadRequest(ApiResponse<ClientLinkMetadata>.ErrorResponse(ex.Message));
         }
     }
 
     [HttpPost("revoke")]
-    public async Task<ActionResult<ClientLinkMetadata>> Revoke([FromBody] RevokeClientLinkRequest request,
+    public async Task<ActionResult<ApiResponse<ClientLinkMetadata>>> Revoke([FromBody] RevokeClientLinkRequest request,
         CancellationToken cancellationToken)
     {
         try
@@ -60,17 +61,17 @@ public class ClientLinkController(
                 request.FilePath,
                 cancellationToken);
 
-            return Ok(result);
+            return Ok(ApiResponse<ClientLinkMetadata>.SuccessResponse(result));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error revoking client link for {CommonName}", request.CommonName);
-            return BadRequest(new { error = ex.Message });
+            return BadRequest(ApiResponse<ClientLinkMetadata>.ErrorResponse(ex.Message));
         }
     }
 
     [HttpPost("download")]
-    public async Task<ActionResult<ClientLinkDownload>> Download([FromBody] DownloadClientLinkRequest request,
+    public async Task<ActionResult<ApiResponse<ClientLinkDownload>>> Download([FromBody] DownloadClientLinkRequest request,
         CancellationToken cancellationToken)
     {
         try
@@ -80,12 +81,12 @@ public class ClientLinkController(
                 request.FilePath,
                 cancellationToken);
 
-            return Ok(result);
+            return Ok(ApiResponse<ClientLinkDownload>.SuccessResponse(result));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error downloading client link for {CommonName}", request.CommonName);
-            return BadRequest(new { error = ex.Message });
+            return BadRequest(ApiResponse<ClientLinkDownload>.ErrorResponse(ex.Message));
         }
     }
 }
