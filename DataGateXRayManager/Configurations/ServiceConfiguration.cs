@@ -50,6 +50,8 @@ public static class ServiceConfiguration
 
         services.Configure<XRayManagementOptions>(config.GetSection("XRayManagement"));
         services.AddSingleton<XRayProcessApi>();
+        services.AddSingleton<IXRayProcessApiRunner>(sp => sp.GetRequiredService<XRayProcessApi>());
+        services.AddSingleton<XRayCoreApiCapabilities>();
         services.AddSingleton<XRayManagementSignalService>();
         services.AddHostedService<XRayAccessLogTailHostedService>();
 
