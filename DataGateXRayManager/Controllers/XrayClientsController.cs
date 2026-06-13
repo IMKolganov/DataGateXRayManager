@@ -1,4 +1,5 @@
 using DataGateMonitor.SharedModels.DataGateXRayManager.XrayClients;
+using DataGateMonitor.SharedModels.Responses;
 using DataGateXRayManager.Helpers;
 using DataGateXRayManager.Services.Interfaces;
 using DataGateXRayManager.Services.XRayServices;
@@ -17,10 +18,10 @@ public sealed class XrayClientsController(
 {
     /// <summary>Dashboard backend polls this endpoint (see DataGateMonitor <c>XrayNodeApiClient</c>).</summary>
     [HttpGet("clients")]
-    public async Task<ActionResult<XrayClientsEnvelope>> GetActiveClients(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<XrayClientsEnvelope>>> GetActiveClients(CancellationToken cancellationToken)
     {
         var result = await activeSessionsService.GetActiveClientsAsync(cancellationToken);
-        return Ok(result);
+        return Ok(ApiResponse<XrayClientsEnvelope>.SuccessResponse(result));
     }
 
     /// <summary>
@@ -28,40 +29,40 @@ public sealed class XrayClientsController(
     /// so the same profile can connect again (otherwise only <c>rmu</c> would leave the UUID unknown until restart/rehydrate).
     /// </summary>
     [HttpPost("clients/kick")]
-    public async Task<ActionResult> KickUser([FromBody] XrayCommonNameRequest request,
+    public async Task<ActionResult<ApiResponse<bool>>> KickUser([FromBody] XrayCommonNameRequest request,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.CommonName))
-            return BadRequest(new { error = "commonName is required" });
+            return BadRequest(ApiResponse<bool>.ErrorResponse("commonName is required"));
         try
         {
             await xRayUserService.KickInboundUserAsync(request.CommonName.Trim(), cancellationToken);
-            return Ok(new { ok = true });
+            return Ok(ApiResponse<bool>.SuccessResponse(true));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Kick user failed for {CommonName}", request.CommonName);
-            return BadRequest(new { error = ex.Message });
+            return BadRequest(ApiResponse<bool>.ErrorResponse(ex.Message));
         }
     }
 
     /// <summary>Revokes the client in the local store and removes them from the inbound (same as client-link revoke).</summary>
     [HttpPost("users/disable")]
-    public async Task<ActionResult> DisableUser([FromBody] XrayCommonNameRequest request,
+    public async Task<ActionResult<ApiResponse<bool>>> DisableUser([FromBody] XrayCommonNameRequest request,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.CommonName))
-            return BadRequest(new { error = "commonName is required" });
+            return BadRequest(ApiResponse<bool>.ErrorResponse("commonName is required"));
         try
         {
             var dataDir = dataPathResolver.GetDataPath();
             await xRayUserService.RevokeCertificateAsync(dataDir, request.CommonName.Trim(), cancellationToken);
-            return Ok(new { ok = true });
+            return Ok(ApiResponse<bool>.SuccessResponse(true));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Disable user failed for {CommonName}", request.CommonName);
-            return BadRequest(new { error = ex.Message });
+            return BadRequest(ApiResponse<bool>.ErrorResponse(ex.Message));
         }
     }
 }

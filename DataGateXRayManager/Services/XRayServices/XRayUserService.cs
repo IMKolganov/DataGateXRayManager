@@ -1,5 +1,5 @@
-using System.Text.Json;
 using DataGateXRayManager.Helpers;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using DataGateMonitor.SharedModels.DataGateXRayManager.Cert.Responses;
 
@@ -11,7 +11,7 @@ public class XRayUserService(
     XRayProcessApi xrayApi,
     ILogger<XRayUserService> logger) : IXRayUserService
 {
-    private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+    private static readonly JsonSerializerSettings JsonOpts = new() { Formatting = Formatting.Indented };
 
     private string InboundTag => configuration["XRay:InboundTag"] ?? "vless-in";
 
@@ -188,7 +188,9 @@ public class XRayUserService(
             return new List<StoredXRayClient>();
 
         await using var fs = File.OpenRead(path);
-        var list = await JsonSerializer.DeserializeAsync<List<StoredXRayClient>>(fs, JsonOpts, ct);
+        using var reader = new StreamReader(fs);
+        var json = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
+        var list = JsonConvert.DeserializeObject<List<StoredXRayClient>>(json, JsonOpts);
         return list ?? new List<StoredXRayClient>();
     }
 
@@ -196,8 +198,8 @@ public class XRayUserService(
     {
         var path = GetStorePath(dataDir);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await using var fs = File.Create(path);
-        await JsonSerializer.SerializeAsync(fs, store, JsonOpts, ct);
+        var json = JsonConvert.SerializeObject(store, JsonOpts);
+        await File.WriteAllTextAsync(path, json, ct).ConfigureAwait(false);
     }
 
     private static string GetStorePath(string dataDir) =>

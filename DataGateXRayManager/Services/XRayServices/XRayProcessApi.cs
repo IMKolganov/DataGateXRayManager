@@ -14,6 +14,7 @@ public class XRayProcessApi(
     IConfiguration configuration,
     IOptions<XRayManagementOptions> managementOptions,
     ILogger<XRayProcessApi> logger)
+    : IXRayProcessApiRunner
 {
     private readonly XRayManagementOptions _api = managementOptions.Value;
 
@@ -22,7 +23,11 @@ public class XRayProcessApi(
         ?? "/usr/local/bin/xray";
 
     /// <summary>Backward-compatible: splits on spaces (no spaces inside individual args). Prefer <see cref="RunApiVerbAsync"/> for <c>rmu</c>.</summary>
-    public Task<string> RunApiAsync(string apiSubcommandAndArgs, string? stdinBody, CancellationToken cancellationToken)
+    public Task<string> RunApiAsync(string apiSubcommandAndArgs, string? stdinBody, CancellationToken cancellationToken) =>
+        RunApiAsync(apiSubcommandAndArgs, stdinBody, cancellationToken, XRayApiCallOptions.Default);
+
+    public Task<string> RunApiAsync(string apiSubcommandAndArgs, string? stdinBody, CancellationToken cancellationToken,
+        XRayApiCallOptions callOptions)
     {
         if (string.IsNullOrWhiteSpace(apiSubcommandAndArgs))
             throw new ArgumentException("API subcommand is required.", nameof(apiSubcommandAndArgs));
@@ -43,11 +48,15 @@ public class XRayProcessApi(
         }
 
         var segments = working.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
-        return RunApiCoreAsync(segments, stdinBody, cancellationToken);
+        return RunApiCoreAsync(segments, stdinBody, cancellationToken, callOptions);
     }
 
     /// <summary>Exact argv after <c>api</c> (e.g. <c>["adu","stdin:"]</c> or <c>["rmu","-tag=vless-in","user@mail"]</c>).</summary>
-    public Task<string> RunApiVerbAsync(IReadOnlyList<string> verbAndArgs, string? stdinBody, CancellationToken cancellationToken)
+    public Task<string> RunApiVerbAsync(IReadOnlyList<string> verbAndArgs, string? stdinBody, CancellationToken cancellationToken) =>
+        RunApiVerbAsync(verbAndArgs, stdinBody, cancellationToken, XRayApiCallOptions.Default);
+
+    public Task<string> RunApiVerbAsync(IReadOnlyList<string> verbAndArgs, string? stdinBody, CancellationToken cancellationToken,
+        XRayApiCallOptions callOptions)
     {
         if (verbAndArgs is null || verbAndArgs.Count == 0)
             throw new ArgumentException("At least one argument is required (e.g. adu or rmu).", nameof(verbAndArgs));
@@ -78,14 +87,15 @@ public class XRayProcessApi(
             stdinBody = null;
         }
 
-        return RunApiCoreAsync(segments, stdinBody, cancellationToken);
+        return RunApiCoreAsync(segments, stdinBody, cancellationToken, callOptions);
     }
 
     private static bool IsTransientXrayApiDialFailure(string stderr) =>
         stderr.Contains("failed to dial", StringComparison.OrdinalIgnoreCase)
         || stderr.Contains("connection refused", StringComparison.OrdinalIgnoreCase);
 
-    private async Task<string> RunApiCoreAsync(List<string> segments, string? stdinBody, CancellationToken cancellationToken)
+    private async Task<string> RunApiCoreAsync(List<string> segments, string? stdinBody, CancellationToken cancellationToken,
+        XRayApiCallOptions callOptions)
     {
         var host = string.IsNullOrWhiteSpace(_api.Host) ? "127.0.0.1" : _api.Host.Trim();
         var serverAddr = $"{host}:{_api.Port}";
@@ -140,7 +150,11 @@ public class XRayProcessApi(
                 return FinishSuccessfulApiCallAsync(verb, combined, stdout, stderr);
             }
 
-            logger.LogWarning("xray api exited {Code}. stderr: {Err}", p.ExitCode, stderr);
+            if (callOptions.LogFailedExitAsDebug)
+                logger.LogDebug("xray api exited {Code}. stderr: {Err}", p.ExitCode, stderr);
+            else
+                logger.LogWarning("xray api exited {Code}. stderr: {Err}", p.ExitCode, stderr);
+
             var err = new InvalidOperationException(
                 $"xray api failed ({p.ExitCode}): {stderr.Trim()} {stdout.Trim()}".Trim());
             lastError = err;

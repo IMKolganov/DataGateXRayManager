@@ -1,6 +1,6 @@
 using System.Globalization;
-using System.Text.Json;
 using DataGateMonitor.SharedModels.DataGateXRayManager.VpnEvent;
+using Newtonsoft.Json.Linq;
 
 namespace DataGateXRayManager.Helpers;
 
@@ -15,24 +15,19 @@ public static class XRayAccessLogLineParser
 
         try
         {
-            using var doc = JsonDocument.Parse(line);
-            var root = doc.RootElement;
+            var root = JObject.Parse(line);
             dto = new AccessLogEventDto { RawJson = line };
 
-            if (root.TryGetProperty("time", out var t))
-            {
-                var s = t.GetString();
-                if (!string.IsNullOrEmpty(s) &&
-                    DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture,
-                        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed))
-                    dto.TimeUtc = parsed;
-            }
+            var time = root["time"]?.ToString();
+            if (!string.IsNullOrEmpty(time) &&
+                DateTimeOffset.TryParse(time, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed))
+                dto.TimeUtc = parsed;
 
             dto.UserEmail = GetString(root, "email", "user", "account");
 
-            if (dto.UserEmail is null && root.TryGetProperty("account", out var acc) && acc.ValueKind == JsonValueKind.Object &&
-                acc.TryGetProperty("email", out var ae))
-                dto.UserEmail = ae.GetString();
+            if (dto.UserEmail is null && root["account"] is JObject acc)
+                dto.UserEmail = acc["email"]?.ToString();
 
             dto.InboundTag = GetNestedTag(root, "inbound", "inboundTag");
             dto.OutboundTag = GetNestedTag(root, "outbound", "outboundTag");
@@ -43,64 +38,58 @@ public static class XRayAccessLogLineParser
 
             dto.Network = GetString(root, "network", "type");
 
-            if (root.TryGetProperty("target", out var target) && target.ValueKind == JsonValueKind.String)
-                dto.Destination = target.GetString();
-            else if (root.TryGetProperty("dest", out var dest))
-                dto.Destination = dest.ValueKind == JsonValueKind.String ? dest.GetString() : dest.GetRawText();
+            if (root["target"] is JValue { Type: JTokenType.String } target)
+                dto.Destination = target.ToString();
+            else if (root["dest"] is JToken dest)
+                dto.Destination = dest.Type == JTokenType.String ? dest.ToString() : dest.ToString(Newtonsoft.Json.Formatting.None);
 
             TryFillBytes(root, dto);
 
             return true;
         }
-        catch (JsonException)
+        catch (Newtonsoft.Json.JsonException)
         {
             return false;
         }
     }
 
-    private static void TryFillBytes(JsonElement root, AccessLogEventDto dto)
+    private static void TryFillBytes(JObject root, AccessLogEventDto dto)
     {
-        if (!root.TryGetProperty("traffic", out var tr) || tr.ValueKind != JsonValueKind.Object)
+        if (root["traffic"] is not JObject tr)
             return;
-        if (tr.TryGetProperty("uplink", out var up) && up.TryGetInt64(out var ul))
+        if (tr["uplink"]?.Value<long?>() is { } ul)
             dto.BytesUp = ul;
-        if (tr.TryGetProperty("downlink", out var down) && down.TryGetInt64(out var dl))
+        if (tr["downlink"]?.Value<long?>() is { } dl)
             dto.BytesDown = dl;
     }
 
-    private static void TryFillEndpoint(JsonElement root, string objectName, AccessLogEventDto dto)
+    private static void TryFillEndpoint(JObject root, string objectName, AccessLogEventDto dto)
     {
-        if (!root.TryGetProperty(objectName, out var ep) || ep.ValueKind != JsonValueKind.Object)
-            return;
-        if (dto.ClientIp is not null)
+        if (root[objectName] is not JObject ep || dto.ClientIp is not null)
             return;
 
-        if (ep.TryGetProperty("address", out var addr))
-            dto.ClientIp = addr.GetString();
-        else if (ep.TryGetProperty("ip", out var ip))
-            dto.ClientIp = ip.GetString();
-
-        if (ep.TryGetProperty("port", out var port) && port.TryGetInt32(out var p))
+        dto.ClientIp = ep["address"]?.ToString() ?? ep["ip"]?.ToString();
+        if (ep["port"]?.Value<int?>() is { } p)
             dto.ClientPort = p;
     }
 
-    private static string? GetNestedTag(JsonElement root, string objectName, string flatName)
+    private static string? GetNestedTag(JObject root, string objectName, string flatName)
     {
-        if (root.TryGetProperty(flatName, out var flat) && flat.ValueKind == JsonValueKind.String)
-            return flat.GetString();
+        if (root[flatName]?.Type == JTokenType.String)
+            return root[flatName]!.ToString();
 
-        if (!root.TryGetProperty(objectName, out var obj) || obj.ValueKind != JsonValueKind.Object)
+        if (root[objectName] is not JObject obj)
             return null;
 
-        return obj.TryGetProperty("tag", out var tag) ? tag.GetString() : null;
+        return obj["tag"]?.ToString();
     }
 
-    private static string? GetString(JsonElement root, params string[] names)
+    private static string? GetString(JObject root, params string[] names)
     {
         foreach (var n in names)
         {
-            if (root.TryGetProperty(n, out var p) && p.ValueKind == JsonValueKind.String)
-                return p.GetString();
+            if (root[n]?.Type == JTokenType.String)
+                return root[n]!.ToString();
         }
 
         return null;

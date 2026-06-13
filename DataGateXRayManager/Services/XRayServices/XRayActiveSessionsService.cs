@@ -12,7 +12,10 @@ namespace DataGateXRayManager.Services.XRayServices;
 /// using standard user traffic counter names (see Xray stats documentation).
 /// if user-level stats are enabled in the Xray config.
 /// </summary>
-public sealed class XRayActiveSessionsService(XRayProcessApi xrayApi, ILogger<XRayActiveSessionsService> logger)
+public sealed class XRayActiveSessionsService(
+    XRayProcessApi xrayApi,
+    XRayCoreApiCapabilities apiCapabilities,
+    ILogger<XRayActiveSessionsService> logger)
     : IXRayActiveSessionsService
 {
     public async Task<XrayClientsEnvelope> GetActiveClientsAsync(CancellationToken cancellationToken)
@@ -37,61 +40,32 @@ public sealed class XRayActiveSessionsService(XRayProcessApi xrayApi, ILogger<XR
 
     private async Task<List<XrayClientSessionDto>> TryCollectOnlineClientsAsync(CancellationToken cancellationToken)
     {
-        try
+        var mode = await apiCapabilities.GetStatOnlineIpListModeAsync(cancellationToken);
+
+        return mode switch
         {
-            var stdout = await xrayApi.RunApiVerbAsync(["statsonlineiplist", "-all", "-include-traffic"], null,
-                cancellationToken);
-            var withTraffic = ParseGetUsersStats(stdout);
-            await EnrichZeroTrafficFromUserStatCountersAsync(withTraffic, cancellationToken);
-            return withTraffic;
-        }
-        catch (InvalidOperationException ex)
-        {
-            var msg = ex.Message;
-            // Older cores: no bulk -all at all — do not retry "statsonlineiplist -all" (same failure).
-            if (LooksLikeUndefinedCliFlag(msg, "-all"))
-            {
-                logger.LogInformation(
-                    "statsonlineiplist has no -all; using statsgetallonlineusers + per-email -email. {Reason}", msg);
-                return await CollectViaLegacyPerEmailAsync(cancellationToken);
-            }
-
-            if (!LooksLikeUndefinedCliFlag(msg, "-include-traffic"))
-                throw;
-
-            logger.LogInformation("Retrying statsonlineiplist without -include-traffic ({Reason})", msg);
-        }
-
-        try
-        {
-            var stdout = await xrayApi.RunApiVerbAsync(["statsonlineiplist", "-all"], null, cancellationToken);
-            var withoutTraffic = ParseGetUsersStats(stdout);
-            await EnrichZeroTrafficFromUserStatCountersAsync(withoutTraffic, cancellationToken);
-            return withoutTraffic;
-        }
-        catch (InvalidOperationException ex)
-        {
-            if (!LooksLikeUndefinedCliFlag(ex.Message, "-all"))
-                throw;
-
-            logger.LogInformation(
-                "statsonlineiplist -all unsupported; using statsgetallonlineusers + per-email -email. {Reason}",
-                ex.Message);
-        }
-
-        return await CollectViaLegacyPerEmailAsync(cancellationToken);
+            XRayStatOnlineIpListMode.AllWithTraffic => await CollectViaAllWithTrafficAsync(cancellationToken),
+            XRayStatOnlineIpListMode.AllWithoutTraffic => await CollectViaAllWithoutTrafficAsync(cancellationToken),
+            XRayStatOnlineIpListMode.LegacyPerEmail => await CollectViaLegacyPerEmailAsync(cancellationToken),
+            _ => await CollectViaLegacyPerEmailAsync(cancellationToken)
+        };
     }
 
-    /// <summary>True when stderr matches Go's <c>flag.CommandLine</c> unknown-flag text for <paramref name="flag"/>.</summary>
-    private static bool LooksLikeUndefinedCliFlag(string message, string flag)
+    private async Task<List<XrayClientSessionDto>> CollectViaAllWithTrafficAsync(CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(message))
-            return false;
+        var stdout = await xrayApi.RunApiVerbAsync(["statsonlineiplist", "-all", "-include-traffic"], null,
+            cancellationToken);
+        var withTraffic = ParseGetUsersStats(stdout);
+        await EnrichZeroTrafficFromUserStatCountersAsync(withTraffic, cancellationToken);
+        return withTraffic;
+    }
 
-        if (!message.Contains("flag provided but not defined", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        return message.Contains($"not defined: {flag}", StringComparison.OrdinalIgnoreCase);
+    private async Task<List<XrayClientSessionDto>> CollectViaAllWithoutTrafficAsync(CancellationToken cancellationToken)
+    {
+        var stdout = await xrayApi.RunApiVerbAsync(["statsonlineiplist", "-all"], null, cancellationToken);
+        var withoutTraffic = ParseGetUsersStats(stdout);
+        await EnrichZeroTrafficFromUserStatCountersAsync(withoutTraffic, cancellationToken);
+        return withoutTraffic;
     }
 
     private async Task<List<XrayClientSessionDto>> CollectViaLegacyPerEmailAsync(CancellationToken cancellationToken)

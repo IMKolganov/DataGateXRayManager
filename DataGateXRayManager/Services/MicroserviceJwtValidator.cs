@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
+using DataGateMonitor.Serialization;
 using DataGateMonitor.SharedModels.Responses;
 using DataGateXRayManager.Services.Interfaces;
 using Microsoft.IdentityModel.Tokens;
@@ -25,7 +26,9 @@ public class MicroserviceJwtValidator(HttpClient httpClient, ILogger<Microservic
             {
                 logger.LogInformation("Attempt to fetch public key from backend with pin {Pin}...", pin);
 
-                var response = await httpClient.GetFromJsonAsync<ApiResponse<string>>($"api/Auth/public-key/{pin}");
+                var httpResponse = await httpClient.GetAsync($"api/Auth/public-key/{pin}");
+                var json = await httpResponse.Content.ReadAsStringAsync();
+                var response = ProjectJson.Deserialize<ApiResponse<string>>(json);
 
                 if (response is { Success: true, Data: not null })
                 {
@@ -55,6 +58,7 @@ public class MicroserviceJwtValidator(HttpClient httpClient, ILogger<Microservic
             var rsa = RSA.Create();
             if (string.IsNullOrEmpty(_publicKey))
                 throw new InvalidOperationException("Public key is empty");
+
             rsa.ImportFromPem(_publicKey.ToCharArray());
 
             var validationParameters = new TokenValidationParameters
@@ -63,10 +67,8 @@ public class MicroserviceJwtValidator(HttpClient httpClient, ILogger<Microservic
                 IssuerSigningKey = new RsaSecurityKey(rsa),
                 ValidateIssuer = true,
                 ValidIssuer = "OpenVPNGateBackend",
-
                 ValidateAudience = true,
                 ValidAudience = "DataGateXRayManager",
-
                 ValidateLifetime = true,
                 ClockSkew = TimeSpan.FromMinutes(2)
             };

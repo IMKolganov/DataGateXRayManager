@@ -50,12 +50,14 @@ public static class ServiceConfiguration
 
         services.Configure<XRayManagementOptions>(config.GetSection("XRayManagement"));
         services.AddSingleton<XRayProcessApi>();
+        services.AddSingleton<IXRayProcessApiRunner>(sp => sp.GetRequiredService<XRayProcessApi>());
+        services.AddSingleton<XRayCoreApiCapabilities>();
         services.AddSingleton<XRayManagementSignalService>();
         services.AddHostedService<XRayAccessLogTailHostedService>();
 
         services.ConfigureProxy(config);
 
-        services.AddControllers();
+        services.AddControllers().AddNewtonsoftJson();
         services.AddEndpointsApiExplorer();
         services.AddSwaggerGen();
     }

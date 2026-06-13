@@ -2,6 +2,7 @@ using DataGateXRayManager.Helpers;
 using DataGateXRayManager.Services.XRayServices;
 using DataGateMonitor.SharedModels.DataGateXRayManager.Cert.Requests;
 using DataGateMonitor.SharedModels.DataGateXRayManager.Cert.Responses;
+using DataGateMonitor.SharedModels.Responses;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DataGateXRayManager.Controllers;
@@ -15,7 +16,7 @@ public class CertController(
     : ControllerBase
 {
     [HttpGet("get-all")]
-    public async Task<ActionResult<List<ServerCertificate>>> GetAllCertificates(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<List<ServerCertificate>>>> GetAllCertificates(CancellationToken cancellationToken)
     {
         try
         {
@@ -25,17 +26,17 @@ public class CertController(
                 mainPath,
                 cancellationToken);
 
-            return Ok(certificates);
+            return Ok(ApiResponse<List<ServerCertificate>>.SuccessResponse(certificates));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error getting all certificates");
-            return BadRequest(new { error = ex.Message });
+            return BadRequest(ApiResponse<List<ServerCertificate>>.ErrorResponse(ex.Message));
         }
     }
 
     [HttpPost("add")]
-    public async Task<ActionResult<ServerCertificate>> AddServerCertificate(
+    public async Task<ActionResult<ApiResponse<ServerCertificate>>> AddServerCertificate(
         [FromBody] AddServerCertificateRequest request, CancellationToken cancellationToken)
     {
         try
@@ -51,17 +52,17 @@ public class CertController(
                 request.CommonName,
                 request.CertExpireDays);
 
-            return Ok(result);
+            return Ok(ApiResponse<ServerCertificate>.SuccessResponse(result));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error building certificate for {CommonName}", request.CommonName);
-            return BadRequest(new { error = ex.Message });
+            return BadRequest(ApiResponse<ServerCertificate>.ErrorResponse(ex.Message));
         }
     }
 
     [HttpPost("revoke")]
-    public async Task<ActionResult<ServerCertificate>> RevokeCertificate([FromBody]
+    public async Task<ActionResult<ApiResponse<ServerCertificate>>> RevokeCertificate([FromBody]
         RevokeServerCertificateRequest request, CancellationToken cancellationToken)
     {
         try
@@ -73,12 +74,12 @@ public class CertController(
                 request.CommonName,
                 cancellationToken);
 
-            return Ok(result);
+            return Ok(ApiResponse<ServerCertificate>.SuccessResponse(result));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error revoking certificate for {CommonName}", request.CommonName);
-            return BadRequest(new { error = ex.Message });
+            return BadRequest(ApiResponse<ServerCertificate>.ErrorResponse(ex.Message));
         }
     }
 }
