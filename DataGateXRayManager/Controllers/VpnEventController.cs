@@ -1,4 +1,5 @@
 using DataGateXRayManager.Hubs;
+using DataGateMonitor.SharedModels.DataGateOpenVpnManager.Models;
 using DataGateMonitor.SharedModels.DataGateXRayManager.VpnEvent.Requests;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -123,7 +124,7 @@ public class VpnEventController(
 
     /// <summary>Hook used by scripts (localhost). Body is opaque environment dump from the dataplane.</summary>
     [HttpPost("envdump")]
-    public IActionResult OnEnvDump([FromBody] object? _)
+    public IActionResult OnEnvDump([FromBody] VpnEnvDump? _)
     {
         return Ok();
     }
