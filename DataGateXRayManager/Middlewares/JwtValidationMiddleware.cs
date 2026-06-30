@@ -3,6 +3,33 @@ using DataGateXRayManager.Services.Interfaces;
 
 namespace DataGateXRayManager.Middlewares;
 
+internal static class JwtValidationHttpContextExtensions
+{
+    internal static JwtValidationRequestContext ToJwtValidationRequestContext(this HttpContext context)
+    {
+        var path = context.Request.Path.HasValue ? context.Request.Path.Value! : "/";
+        var method = string.IsNullOrWhiteSpace(context.Request.Method) ? "GET" : context.Request.Method;
+        var userAgent = context.Request.Headers["User-Agent"].ToString();
+        return new JwtValidationRequestContext(
+            ResolveClientIp(context),
+            path,
+            method,
+            string.IsNullOrWhiteSpace(userAgent) ? null : userAgent);
+    }
+
+    private static string? ResolveClientIp(HttpContext ctx)
+    {
+        if (ctx.Request.Headers.TryGetValue("X-Forwarded-For", out var forwarded))
+        {
+            var first = forwarded.ToString().Split(',').Select(s => s.Trim()).FirstOrDefault();
+            if (!string.IsNullOrEmpty(first) && IPAddress.TryParse(first, out _))
+                return first;
+        }
+
+        return ctx.Connection.RemoteIpAddress?.ToString();
+    }
+}
+
 public class JwtValidationMiddleware(RequestDelegate next)
 {
     private static readonly string[] ExcludedPaths =
@@ -22,6 +49,7 @@ public class JwtValidationMiddleware(RequestDelegate next)
     public async Task Invoke(HttpContext context, IMicroserviceJwtValidator validator)
     {
         var requestPath = context.Request.Path;
+        var requestContext = context.ToJwtValidationRequestContext();
 
         if (ExcludedPaths.Any(p => requestPath.StartsWithSegments(p, StringComparison.OrdinalIgnoreCase)))
         {
@@ -45,7 +73,7 @@ public class JwtValidationMiddleware(RequestDelegate next)
         if (string.IsNullOrWhiteSpace(token))
             token = context.Request.Query["access_token"];
 
-        if (!string.IsNullOrWhiteSpace(token) && validator.ValidateToken(token, out var principal))
+        if (!string.IsNullOrWhiteSpace(token) && validator.ValidateToken(token, out var principal, requestContext))
         {
             context.User = principal ?? throw new InvalidOperationException("Principal is null");
             await next(context);
