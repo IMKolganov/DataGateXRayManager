@@ -113,6 +113,25 @@ public class ExternalIpAddressServiceTests
         Assert.Equal("203.0.113.9", await sut.GetPublicIpAddressAsync(CancellationToken.None));
     }
 
+    [Fact]
+    public async Task GetPublicIpAddressAsync_SkipsBlankResponses()
+    {
+        const string url1 = "https://a.test/ip";
+        const string url2 = "https://b.test/ip";
+        var handler = new FakeHandler((req, _) =>
+        {
+            var body = req.RequestUri!.ToString() == url1 ? "   \n" : "198.51.100.4";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body)
+            });
+        });
+        var sut = new ExternalIpAddressService(
+            _logger.Object, BuildConfig(url1, url2), new HttpClient(handler), new MemoryCache(new MemoryCacheOptions()));
+
+        Assert.Equal("198.51.100.4", await sut.GetPublicIpAddressAsync(CancellationToken.None));
+    }
+
     [Theory]
     [InlineData("127.0.0.1")]
     [InlineData("0.0.0.0")]
