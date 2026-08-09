@@ -1,6 +1,7 @@
 using System.Reflection;
 using DataGateMonitor.SharedModels.DataGateXRayManager.Info;
 using DataGateMonitor.SharedModels.Responses;
+using DataGateXRayManager.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DataGateXRayManager.Controllers;
@@ -10,15 +11,26 @@ namespace DataGateXRayManager.Controllers;
 public class IndexController(
     IConfiguration config,
     IWebHostEnvironment env,
-    ILogger<IndexController> logger)
+    ILogger<IndexController> logger,
+    IExternalIpAddressService externalIpAddressService)
     : ControllerBase
 {
     [HttpGet]
-    public Task<ActionResult<ApiResponse<RootXrayInfoResponse>>> Get(CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<RootXrayInfoResponse>>> Get(CancellationToken cancellationToken)
     {
         try
         {
             var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "Unknown version";
+            string? publicIp = null;
+            try
+            {
+                publicIp = await externalIpAddressService.GetPublicIpAddressAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to resolve PublicIp for /api/info");
+            }
+
             var response = new RootXrayInfoResponse
             {
                 Version = version,
@@ -26,6 +38,7 @@ public class IndexController(
                 Application = "DataGateXRayManager",
                 Description =
                     "Manages XRay (VLESS) clients: certificates, client links, WebSocket proxy. Events: POST /api/vpn-events/* (hooks), SignalR /hubs/xray-event (ClientConnected/Disconnected, AccessLogRecord from access.log JSON, AccessLogRaw fallback).",
+                PublicIp = publicIp,
                 Config = new ConfigInfoResponse
                 {
                     Dns1 = config["DNS1"],
@@ -45,14 +58,12 @@ public class IndexController(
                     BackendBaseUrl = config["Backend:BaseUrl"]
                 }
             };
-            return Task.FromResult<ActionResult<ApiResponse<RootXrayInfoResponse>>>(
-                Ok(ApiResponse<RootXrayInfoResponse>.SuccessResponse(response)));
+            return Ok(ApiResponse<RootXrayInfoResponse>.SuccessResponse(response));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Error getting info");
-            return Task.FromResult<ActionResult<ApiResponse<RootXrayInfoResponse>>>(
-                BadRequest(ApiResponse<RootXrayInfoResponse>.ErrorResponse(ex.Message)));
+            return BadRequest(ApiResponse<RootXrayInfoResponse>.ErrorResponse(ex.Message));
         }
     }
 }

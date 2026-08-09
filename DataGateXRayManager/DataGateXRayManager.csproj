@@ -5,13 +5,13 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <RootNamespace>DataGateXRayManager</RootNamespace>
-        <Version>1.1.2.4</Version>
-        <AssemblyVersion>1.1.2.4</AssemblyVersion>
-        <FileVersion>1.1.2.4</FileVersion>
+        <Version>1.1.2.7</Version>
+        <AssemblyVersion>1.1.2.7</AssemblyVersion>
+        <FileVersion>1.1.2.7</FileVersion>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="DataGateMonitor.SharedModels" Version="1.0.34" />
+        <PackageReference Include="DataGateMonitor.SharedModels" Version="1.0.48" />
     </ItemGroup>
 
     <ItemGroup>
@@ -27,6 +27,16 @@
         <PackageReference Include="Serilog.Sinks.Elasticsearch" Version="10.0.0" />
         <PackageReference Include="Swashbuckle.AspNetCore" Version="10.2.3" />
         <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.19.1" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <Content Update="externalipsettings.json">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="DataGateXRayManager.Tests" />
     </ItemGroup>
 
 </Project>

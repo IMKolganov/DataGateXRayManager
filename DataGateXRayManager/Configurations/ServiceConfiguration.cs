@@ -32,6 +32,12 @@ public static class ServiceConfiguration
 
         services.AddSingleton<IDataPathResolver, DataPathResolver>();
 
+        services.AddMemoryCache();
+        services.AddHttpClient<IExternalIpAddressService, ExternalIpAddressService>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(10);
+        });
+
         services.AddHttpClient<MicroserviceJwtValidator>(client =>
         {
             var baseUrl = config["Backend:BaseUrl"];
