@@ -19,6 +19,9 @@ mkdir -p "$DATA_DIR/xray"
 ACCESS_LOG="$DATA_DIR/xray/access.log"
 ERROR_LOG="$DATA_DIR/xray/error.log"
 touch "$ACCESS_LOG" "$ERROR_LOG"
+# Pi-hole DNS collector cursor / runtime config (same layout idea as OpenVPN DATA_DIR)
+touch "$DATA_DIR/pihole-query-cursor.txt" 2>/dev/null || true
+
 
 CONFIG_PATH="${CONFIG_PATH:-$DATA_DIR/xray/config.json}"
 

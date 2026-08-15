@@ -63,6 +63,8 @@ public static class ServiceConfiguration
 
         services.ConfigureProxy(config);
 
+        services.ConfigurePiHole(config);
+
         services.AddControllers().AddNewtonsoftJson();
         services.AddEndpointsApiExplorer();
         services.AddSwaggerGen();
