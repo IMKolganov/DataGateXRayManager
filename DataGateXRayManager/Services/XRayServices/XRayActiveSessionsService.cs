@@ -1,5 +1,6 @@
 using System.Globalization;
 using DataGateMonitor.SharedModels.DataGateXRayManager.XrayClients;
+using DataGateXRayManager.Services.Proxy;
 using Newtonsoft.Json.Linq;
 
 namespace DataGateXRayManager.Services.XRayServices;
@@ -15,6 +16,7 @@ namespace DataGateXRayManager.Services.XRayServices;
 public sealed class XRayActiveSessionsService(
     XRayProcessApi xrayApi,
     XRayCoreApiCapabilities apiCapabilities,
+    IActiveProxyConnectionService activeProxyConnections,
     ILogger<XRayActiveSessionsService> logger)
     : IXRayActiveSessionsService
 {
@@ -24,6 +26,7 @@ public sealed class XRayActiveSessionsService(
         try
         {
             var clients = await TryCollectOnlineClientsAsync(cancellationToken);
+            XRayProxyRealIpEnricher.Enrich(clients, activeProxyConnections);
             return new XrayClientsEnvelope { Clients = clients, PolledAt = polledAt };
         }
         catch (Exception ex)
@@ -197,7 +200,7 @@ public sealed class XRayActiveSessionsService(
     }
 
     /// <summary>Parses <c>GetStatsOnlineIpListResponse</c> (single user) from older cores.</summary>
-    private static XrayClientSessionDto? ParseSingleUserOnlineIpList(string stdout, string email)
+    internal static XrayClientSessionDto? ParseSingleUserOnlineIpList(string stdout, string email)
     {
         if (string.IsNullOrWhiteSpace(stdout))
             return null;
@@ -218,15 +221,15 @@ public sealed class XRayActiveSessionsService(
         }
 
         DateTimeOffset? minSeen = null;
-        string? primaryIp = null;
+        string? primaryPublic = null;
+        string? primaryPrivate = null;
 
         if (ipsToken is JArray arr)
         {
             foreach (var ipEntry in arr.OfType<JObject>())
             {
                 var ip = (string?)ipEntry["ip"] ?? (string?)ipEntry["Ip"] ?? "";
-                if (string.IsNullOrEmpty(primaryIp))
-                    primaryIp = ip;
+                ConsiderIp(ip, ref primaryPublic, ref primaryPrivate);
 
                 var ls = ipEntry["lastSeen"] ?? ipEntry["LastSeen"];
                 var dto = ParseLastSeen(ls);
@@ -239,8 +242,7 @@ public sealed class XRayActiveSessionsService(
             foreach (var prop in map.Properties())
             {
                 var ip = prop.Name;
-                if (string.IsNullOrEmpty(primaryIp))
-                    primaryIp = ip;
+                ConsiderIp(ip, ref primaryPublic, ref primaryPrivate);
 
                 DateTimeOffset? dto = null;
                 var v = prop.Value;
@@ -257,7 +259,7 @@ public sealed class XRayActiveSessionsService(
         return new XrayClientSessionDto
         {
             Email = email,
-            RemoteAddress = primaryIp ?? "",
+            RemoteAddress = primaryPrivate ?? primaryPublic ?? "",
             Username = email,
             BytesReceived = 0,
             BytesSent = 0,
@@ -274,7 +276,7 @@ public sealed class XRayActiveSessionsService(
         return null;
     }
 
-    private static List<XrayClientSessionDto> ParseGetUsersStats(string stdout)
+    internal static List<XrayClientSessionDto> ParseGetUsersStats(string stdout)
     {
         var list = new List<XrayClientSessionDto>();
         if (string.IsNullOrWhiteSpace(stdout))
@@ -311,12 +313,12 @@ public sealed class XRayActiveSessionsService(
             }
 
             DateTimeOffset? minSeen = null;
-            string? primaryIp = null;
+            string? primaryPublic = null;
+            string? primaryPrivate = null;
             foreach (var ipEntry in ips.OfType<JObject>())
             {
                 var ip = (string?)ipEntry["ip"] ?? (string?)ipEntry["Ip"] ?? "";
-                if (string.IsNullOrEmpty(primaryIp))
-                    primaryIp = ip;
+                ConsiderIp(ip, ref primaryPublic, ref primaryPrivate);
 
                 var ls = ipEntry["lastSeen"] ?? ipEntry["LastSeen"];
                 var dto = ParseLastSeen(ls);
@@ -327,7 +329,7 @@ public sealed class XRayActiveSessionsService(
             list.Add(new XrayClientSessionDto
             {
                 Email = email,
-                RemoteAddress = primaryIp ?? "",
+                RemoteAddress = primaryPrivate ?? primaryPublic ?? "",
                 Username = email,
                 BytesReceived = uplink,
                 BytesSent = downlink,
@@ -336,6 +338,18 @@ public sealed class XRayActiveSessionsService(
         }
 
         return list;
+    }
+
+    /// <summary>Prefer the private/docker peer for RemoteAddress (stable session key); public goes to ProxyRealIp via enricher.</summary>
+    private static void ConsiderIp(string ip, ref string? primaryPublic, ref string? primaryPrivate)
+    {
+        if (string.IsNullOrWhiteSpace(ip))
+            return;
+
+        if (XRayProxyRealIpEnricher.NeedsProxyEnrichment(ip))
+            primaryPrivate ??= ip;
+        else
+            primaryPublic ??= ip;
     }
 
     private static DateTimeOffset? ParseLastSeen(JToken? token)
