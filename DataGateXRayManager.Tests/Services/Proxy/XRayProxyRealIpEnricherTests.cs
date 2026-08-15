@@ -197,6 +197,61 @@ public class XRayProxyRealIpEnricherTests
     }
 
     [Fact]
+    public void Enrich_AmbiguousSameHostWithoutPort_DoesNotGuess()
+    {
+        // Typical multi-user docker peer IP without port in statsonlineiplist.
+        var clients = new List<XrayClientSessionDto>
+        {
+            new() { Email = "a", RemoteAddress = "172.20.0.2" }
+        };
+        var hints = new List<ProxySessionHint>
+        {
+            Hint("c1", "172.20.0.2", 1111, "203.0.113.1", 1, null),
+            Hint("c2", "172.20.0.2", 2222, "203.0.113.2", 2, null),
+        };
+
+        XRayProxyRealIpEnricher.Enrich(clients, hints);
+
+        Assert.Null(clients[0].ProxyRealIp);
+    }
+
+    [Fact]
+    public void Enrich_ByCommonName_DisambiguatesDuplicateHostsWithoutPort()
+    {
+        var clients = new List<XrayClientSessionDto>
+        {
+            new() { Email = "user-a", RemoteAddress = "172.20.0.2" }
+        };
+        var hints = new List<ProxySessionHint>
+        {
+            Hint("c1", "172.20.0.2", 1111, "203.0.113.1", 1, "user-b"),
+            Hint("c2", "172.20.0.2", 2222, "203.0.113.2", 2, "user-a"),
+        };
+
+        XRayProxyRealIpEnricher.Enrich(clients, hints);
+
+        Assert.Equal("203.0.113.2:2", clients[0].ProxyRealIp);
+    }
+
+    [Fact]
+    public void Enrich_SpoofedClientRef_DoesNotStealUniqueHostMatchOfAnotherUser()
+    {
+        // Attacker opens /api/proxy?clientRef=victim but LocalProxy host differs from victim's peer.
+        var clients = new List<XrayClientSessionDto>
+        {
+            new() { Email = "victim", RemoteAddress = "172.20.0.2" }
+        };
+        var hints = new List<ProxySessionHint>
+        {
+            Hint("attacker", "10.0.0.9", 40000, "198.51.100.66", 443, "victim")
+        };
+
+        XRayProxyRealIpEnricher.Enrich(clients, hints);
+
+        Assert.Null(clients[0].ProxyRealIp);
+    }
+
+    [Fact]
     public void Enrich_ViaActiveProxyConnectionService_HostPortMatch()
     {
         var svc = new ActiveProxyConnectionService();

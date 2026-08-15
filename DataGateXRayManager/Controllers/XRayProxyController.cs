@@ -382,16 +382,23 @@ public class XRayProxyController(
         });
     }
 
-    private (string? Ip, int Port) GetHttpClientAddress()
+    private (string? Ip, int Port) GetHttpClientAddress() =>
+        ResolveHttpClientAddress(HttpContext);
+
+    /// <summary>
+    /// Client IP for proxy history/enrichment, plus TCP remote port when it belongs to that IP.
+    /// When the IP comes from trusted XFF (differs from the TCP peer), port is forced to 0 —
+    /// mashing XFF IP with the LB hop port would produce a fake endpoint.
+    /// </summary>
+    public static (string? Ip, int Port) ResolveHttpClientAddress(HttpContext ctx)
     {
-        var ip = ResolveClientIp(HttpContext);
-        // When IP comes from X-Forwarded-For, TCP RemotePort is the LB hop — do not mash them.
-        if (HttpContext.Request.Headers.ContainsKey("X-Forwarded-For")
+        var ip = ResolveClientIpFromContext(ctx);
+        if (ctx.Request.Headers.ContainsKey("X-Forwarded-For")
             && !string.IsNullOrEmpty(ip)
-            && ip != HttpContext.Connection.RemoteIpAddress?.ToString())
+            && ip != ctx.Connection.RemoteIpAddress?.ToString())
             return (ip, 0);
 
-        return (ip, HttpContext.Connection.RemotePort);
+        return (ip, ctx.Connection.RemotePort);
     }
 
     /// <summary>
@@ -424,8 +431,6 @@ public class XRayProxyController(
         var trimmed = value.Trim();
         return trimmed.Length == 0 ? null : trimmed;
     }
-
-    private static string? ResolveClientIp(HttpContext ctx) => ResolveClientIpFromContext(ctx);
 
     /// <summary>
     /// Real WebSocket client IP: first public <c>X-Forwarded-For</c> hop only when the TCP peer is
