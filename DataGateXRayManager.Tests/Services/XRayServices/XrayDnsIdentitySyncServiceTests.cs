@@ -199,6 +199,69 @@ public class XrayDnsIdentitySyncServiceTests
     }
 
     [Fact]
+    public async Task SyncAsync_UndottedPrefix_DoesNotThrow()
+    {
+        var dataDir = Path.Combine(Path.GetTempPath(), "xray-sync-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dataDir, "xray"));
+        try
+        {
+            var realStore = new XrayClientStore(new XrayClientStoreLock());
+            await realStore.SaveAsync(dataDir,
+            [
+                new StoredXRayClient
+                {
+                    CommonName = "cn-1",
+                    Uuid = Guid.NewGuid().ToString(),
+                    IdentityIp = "10.80.0.2",
+                    IsRevoked = false
+                }
+            ], CancellationToken.None);
+
+            var config = Config(
+                ("XRAY_DNS_IDENTITY_ENABLED", "true"),
+                ("XRAY_DNS_IDENTITY_SUBNET", "10.80.0.0/24"),
+                ("XRAY_DNS_IDENTITY_SYNC_SCRIPT", "/bin/true"),
+                ("XRAY_DNS_IDENTITY_SYNC_DEBOUNCE_MS", "0"),
+                ("XRayManagement:Host", "127.0.0.1"),
+                ("XRayManagement:Port", "1"));
+
+            var paths = new Mock<IDataPathResolver>();
+            paths.Setup(x => x.GetDataPath()).Returns(dataDir);
+
+            var runner = new Mock<IXrayDnsIdentityScriptRunner>();
+            runner.Setup(x => x.RunAsync(It.IsAny<XrayDnsIdentityScriptRequest>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new XrayDnsIdentityScriptResult { ExitCode = 0, Stdout = "ok", Stderr = "" });
+
+            var users = new Mock<IXRayUserService>();
+            users.Setup(x => x.RehydrateClientsAsync(It.IsAny<IReadOnlyList<StoredXRayClient>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+            var services = new ServiceCollection();
+            services.AddScoped(_ => users.Object);
+            var sp = services.BuildServiceProvider();
+            var piHole = new Mock<IPiHoleRuntimeOptionsStore>();
+            piHole.Setup(x => x.GetEffective()).Returns(new PiHoleOptions { ClientSubnetPrefix = "10.80.0" });
+
+            var sut = new XrayDnsIdentitySyncService(
+                config,
+                paths.Object,
+                realStore,
+                new XrayClientStoreLock(),
+                runner.Object,
+                piHole.Object,
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                NullLogger<XrayDnsIdentitySyncService>.Instance);
+
+            await sut.SyncAsync(CancellationToken.None);
+            runner.Verify(x => x.RunAsync(It.IsAny<XrayDnsIdentityScriptRequest>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+        finally
+        {
+            try { Directory.Delete(dataDir, true); } catch { /* ignore */ }
+        }
+    }
+
+    [Fact]
     public async Task SyncAsync_MisalignedPrefix_Throws()
     {
         var config = Config(

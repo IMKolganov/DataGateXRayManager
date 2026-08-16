@@ -56,6 +56,32 @@ public class ClientLinkServiceDnsPlaceholderTests
     }
 
     [Fact]
+    public void DashboardXrayExportTemplate_MatchesFrontendPlaceholderContract()
+    {
+        // Keep in sync with frontend/src/utils/exportConfigTemplates.ts XRAY_EXPORT_TEMPLATE.
+        Assert.Contains("{{vless_uri}}", DashboardXrayExportTemplate);
+        Assert.Contains("{{dns_servers_json}}", DashboardXrayExportTemplate);
+        Assert.Contains("{{dns_identity_enabled}}", DashboardXrayExportTemplate);
+        Assert.Contains("\"dnsServers\"", DashboardXrayExportTemplate);
+        Assert.Contains("\"dnsIdentityEnabled\"", DashboardXrayExportTemplate);
+        Assert.StartsWith("{", DashboardXrayExportTemplate.Trim());
+    }
+
+    [Fact]
+    public async Task AddClientLink_JsonWithoutDnsPlaceholders_OmitsDnsServersKey()
+    {
+        var text = await IssueAsync(
+            """{"vless":"{{vless_uri}}","uuid":"{{uuid}}"}""",
+            dns1: "172.20.0.1",
+            dns2: null,
+            identity: true);
+
+        using var doc = JsonDocument.Parse(text.Trim());
+        Assert.False(doc.RootElement.TryGetProperty("dnsServers", out _));
+        Assert.StartsWith("vless://", doc.RootElement.GetProperty("vless").GetString());
+    }
+
+    [Fact]
     public async Task AddClientLink_NoDnsEnv_EmitsEmptyDnsServersAndIdentityFalse()
     {
         var text = await IssueAsync(DashboardXrayExportTemplate, dns1: null, dns2: null, identity: false);

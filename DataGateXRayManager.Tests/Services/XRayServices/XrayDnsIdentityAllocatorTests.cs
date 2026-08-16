@@ -104,6 +104,7 @@ public class XrayDnsIdentityAllocatorTests
     public void ClientSubnetPrefixCoversIdentityPool_DetectsMismatch()
     {
         Assert.True(XrayDnsIdentityAllocator.ClientSubnetPrefixCoversIdentityPool("10.80.0.", "10.80.0.0/24"));
+        Assert.True(XrayDnsIdentityAllocator.ClientSubnetPrefixCoversIdentityPool("10.80.0", "10.80.0.0/24"));
         Assert.False(XrayDnsIdentityAllocator.ClientSubnetPrefixCoversIdentityPool("10.80.1.", "10.80.0.0/24"));
         Assert.False(XrayDnsIdentityAllocator.ClientSubnetPrefixCoversIdentityPool("", "10.80.0.0/24"));
     }

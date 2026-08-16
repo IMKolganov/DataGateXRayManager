@@ -162,7 +162,11 @@ public class PiHoleQueryCollectorHostedServiceTests
         clientProxy.Verify(
             c => c.SendCoreAsync("DnsQueriesReceived", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()),
             Times.Never);
-        Assert.Equal(0, status.GetSnapshot().LastPollQueriesForwarded);
+        var snapshot = status.GetSnapshot();
+        Assert.Equal(1, snapshot.LastPollQueriesFetched);
+        Assert.Equal(1, snapshot.LastPollQueriesAfterFilter);
+        Assert.Equal(0, snapshot.LastPollQueriesEnriched);
+        Assert.Equal(0, snapshot.LastPollQueriesForwarded);
     }
 
     [Fact]

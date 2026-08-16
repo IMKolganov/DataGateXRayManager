@@ -105,4 +105,21 @@ public class IndexControllerTests
         Assert.False(response.Data!.Config.DnsIdentityEnabled);
         Assert.Equal(["1.1.1.1"], response.Data.Config.ClientDnsServers);
     }
+
+    [Fact]
+    public async Task Get_IdentityOn_EmptyDns_ExposesEmptyClientDnsServers()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["XRAY_DNS_IDENTITY_ENABLED"] = "true",
+        }).Build();
+
+        var controller = new IndexController(config, _env.Object, _logger.Object, _externalIp.Object);
+        var result = await controller.Get(CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<ApiResponse<RootXrayInfoResponse>>(ok.Value);
+        Assert.True(response.Data!.Config.DnsIdentityEnabled);
+        Assert.Empty(response.Data.Config.ClientDnsServers);
+    }
 }
