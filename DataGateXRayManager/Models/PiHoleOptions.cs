@@ -14,6 +14,12 @@ public sealed class PiHoleOptions
 
     public int LookbackSeconds { get; set; } = 120;
 
-  /// <summary>Only collect queries from client IPs starting with this prefix (e.g. 10.51.30.).</summary>
+    /// <summary>Only collect queries from client IPs starting with this prefix (e.g. 10.80.0.). Required on shared Pi-hole.</summary>
     public string ClientSubnetPrefix { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Comma-separated client IP prefixes to drop (e.g. <c>10.51.15.,10.51.16.</c> for co-located OpenVPN).
+    /// Applied after <see cref="ClientSubnetPrefix"/>.
+    /// </summary>
+    public string ClientSubnetExcludePrefixes { get; set; } = string.Empty;
 }

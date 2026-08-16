@@ -1,5 +1,4 @@
 using DataGateXRayManager.Helpers;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using DataGateMonitor.SharedModels.DataGateXRayManager.Cert.Responses;
 
@@ -8,52 +7,66 @@ namespace DataGateXRayManager.Services.XRayServices;
 public class XRayUserService(
     IConfiguration configuration,
     IDataPathResolver dataPathResolver,
-    XRayProcessApi xrayApi,
+    IXRayProcessApiRunner xrayApi,
+    IXrayClientStore clientStore,
+    IXrayClientStoreLock storeLock,
+    IXrayDnsIdentitySyncService dnsIdentitySync,
     ILogger<XRayUserService> logger) : IXRayUserService
 {
-    private static readonly JsonSerializerSettings JsonOpts = new() { Formatting = Formatting.Indented };
-
     private string InboundTag => configuration["XRay:InboundTag"] ?? "vless-in";
 
     private string DefaultFlow => configuration["XRay:DefaultClientFlow"] ?? "";
 
+    private string IdentitySubnet => configuration["XRAY_DNS_IDENTITY_SUBNET"]
+                                     ?? configuration["Xray:DnsIdentity:Subnet"]
+                                     ?? XrayDnsIdentityAllocator.DefaultSubnetCidr;
+
     public async Task KickInboundUserAsync(string commonName, CancellationToken cancellationToken)
     {
-        await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken);
+        await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken, XRayApiCallOptions.Default);
 
         // rmu drops the user from the running inbound only; clients.store.json still lists them. Without a
         // follow-up adu, reconnects fail (unknown UUID). Re-push active store rows so "kick" = drop session, keep credential.
         var dataDir = Path.GetFullPath(dataPathResolver.GetDataPath());
-        var store = await LoadStoreAsync(dataDir, cancellationToken);
+        var store = await clientStore.LoadAsync(dataDir, cancellationToken);
         var client = store.FirstOrDefault(c =>
             !c.IsRevoked && string.Equals(c.CommonName, commonName, StringComparison.OrdinalIgnoreCase));
         if (client is null)
             return;
 
         var userJson = BuildAddUserJson(client.CommonName, client.Uuid, client.Flow ?? "");
-        await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken);
+        await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken, XRayApiCallOptions.Default);
         logger.LogInformation("Kick: re-added {CommonName} to running Xray after rmu.", commonName);
     }
 
-    public async Task RehydrateRunningXrayFromStoreAsync(string dataDir, CancellationToken cancellationToken)
+    public async Task<int> RehydrateRunningXrayFromStoreAsync(string dataDir, CancellationToken cancellationToken)
     {
         dataDir = Path.GetFullPath(dataDir);
-        var store = await LoadStoreAsync(dataDir, cancellationToken);
-        var active = store.Where(c => !c.IsRevoked).ToList();
-        if (active.Count == 0)
+        var store = await clientStore.LoadAsync(dataDir, cancellationToken);
+        return await RehydrateClientsAsync(store.Where(c => !c.IsRevoked).ToList(), cancellationToken);
+    }
+
+    public async Task<int> RehydrateClientsAsync(IReadOnlyList<StoredXRayClient> clients, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(clients);
+        if (clients.Count == 0)
         {
-            logger.LogInformation("Xray store rehydrate: no active clients in store.");
-            return;
+            logger.LogInformation("Xray store rehydrate: no active clients to push.");
+            return 0;
         }
 
-        logger.LogInformation("Xray store rehydrate: pushing {Count} client(s) to running Xray via adu.", active.Count);
-        foreach (var c in active)
+        logger.LogInformation("Xray store rehydrate: pushing {Count} client(s) to running Xray via adu.", clients.Count);
+        var ok = 0;
+        foreach (var c in clients)
         {
+            if (c.IsRevoked)
+                continue;
             try
             {
                 var userJson = BuildAddUserJson(c.CommonName, c.Uuid, c.Flow ?? "");
-                await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken);
+                await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken, XRayApiCallOptions.Default);
                 logger.LogInformation("Rehydrated Xray VLESS client {CommonName} (UUID={Uuid}).", c.CommonName, c.Uuid);
+                ok++;
             }
             catch (Exception ex)
             {
@@ -62,12 +75,14 @@ public class XRayUserService(
                     c.CommonName, c.Uuid);
             }
         }
+
+        return ok;
     }
 
     public async Task<List<ServerCertificate>> GetAllCertificateInfoInIndexFileAsync(string dataDir,
         CancellationToken cancellationToken)
     {
-        var list = await LoadStoreAsync(dataDir, cancellationToken);
+        var list = await clientStore.LoadAsync(dataDir, cancellationToken);
         return list.Where(c => !c.IsRevoked).Select(MapToServerCertificate).ToList();
     }
 
@@ -75,27 +90,53 @@ public class XRayUserService(
         string commonName = "client1", int certExpireDays = 365)
     {
         dataDir = Path.GetFullPath(dataDir);
-        var store = await LoadStoreAsync(dataDir, cancellationToken);
-        if (store.Any(c => !c.IsRevoked && string.Equals(c.CommonName, commonName, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException($"Client with CommonName '{commonName}' already exists.");
-
-        var uuid = Guid.NewGuid().ToString();
-        var flow = DefaultFlow;
-        var client = new StoredXRayClient
+        StoredXRayClient client;
+        await storeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            CommonName = commonName,
-            Uuid = uuid,
-            CreatedUtc = DateTime.UtcNow,
-            Flow = flow
-        };
+            var store = await clientStore.LoadUnlockedAsync(dataDir, cancellationToken).ConfigureAwait(false);
+            if (store.Any(c => !c.IsRevoked && string.Equals(c.CommonName, commonName, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"Client with CommonName '{commonName}' already exists.");
 
-        var userJson = BuildAddUserJson(commonName, uuid, flow);
-        await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken);
+            var uuid = Guid.NewGuid().ToString();
+            var flow = DefaultFlow;
+            client = new StoredXRayClient
+            {
+                CommonName = commonName,
+                Uuid = uuid,
+                CreatedUtc = DateTime.UtcNow,
+                Flow = flow
+            };
 
-        store.Add(client);
-        await SaveStoreAsync(dataDir, store, cancellationToken);
+            if (dnsIdentitySync.IsEnabled)
+            {
+                var used = store.Where(c => !c.IsRevoked).Select(c => c.IdentityIp);
+                client.IdentityIp = XrayDnsIdentityAllocator.AllocateNext(IdentitySubnet, used)
+                                    ?? throw new InvalidOperationException(
+                                        $"DNS identity IP pool exhausted for subnet '{IdentitySubnet}'.");
+            }
 
-        logger.LogInformation("XRay VLESS client created: CN={CommonName}, UUID={Uuid}", commonName, uuid);
+            store.Add(client);
+            await clientStore.SaveUnlockedAsync(dataDir, store, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            storeLock.Release();
+        }
+
+        if (dnsIdentitySync.IsEnabled)
+        {
+            await dnsIdentitySync.SyncAsync(cancellationToken);
+        }
+        else
+        {
+            var userJson = BuildAddUserJson(client.CommonName, client.Uuid, client.Flow ?? "");
+            await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken, XRayApiCallOptions.Default);
+        }
+
+        logger.LogInformation(
+            "XRay VLESS client created: CN={CommonName}, UUID={Uuid}, IdentityIp={IdentityIp}",
+            client.CommonName, client.Uuid, client.IdentityIp ?? "(none)");
         return MapToServerCertificate(client);
     }
 
@@ -103,17 +144,31 @@ public class XRayUserService(
         CancellationToken cancellationToken)
     {
         dataDir = Path.GetFullPath(dataDir);
-        var store = await LoadStoreAsync(dataDir, cancellationToken);
-        var client = store.FirstOrDefault(c =>
-            !c.IsRevoked && string.Equals(c.CommonName, commonName, StringComparison.OrdinalIgnoreCase));
-        if (client is null)
-            throw new InvalidOperationException($"Client '{commonName}' not found.");
+        StoredXRayClient client;
+        await storeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var store = await clientStore.LoadUnlockedAsync(dataDir, cancellationToken).ConfigureAwait(false);
+            var found = store.FirstOrDefault(c =>
+                !c.IsRevoked && string.Equals(c.CommonName, commonName, StringComparison.OrdinalIgnoreCase));
+            if (found is null)
+                throw new InvalidOperationException($"Client '{commonName}' not found.");
 
-        await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken);
+            client = found;
+            await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken, XRayApiCallOptions.Default);
 
-        client.IsRevoked = true;
-        client.RevokedUtc = DateTime.UtcNow;
-        await SaveStoreAsync(dataDir, store, cancellationToken);
+            client.IsRevoked = true;
+            client.RevokedUtc = DateTime.UtcNow;
+            client.IdentityIp = null;
+            await clientStore.SaveUnlockedAsync(dataDir, store, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            storeLock.Release();
+        }
+
+        if (dnsIdentitySync.IsEnabled)
+            await dnsIdentitySync.SyncAsync(cancellationToken);
 
         return new ServerCertificate
         {
@@ -180,28 +235,4 @@ public class XRayUserService(
             KeyPath = null,
             Message = "VLESS client"
         };
-
-    private static async Task<List<StoredXRayClient>> LoadStoreAsync(string dataDir, CancellationToken ct)
-    {
-        var path = GetStorePath(dataDir);
-        if (!File.Exists(path))
-            return new List<StoredXRayClient>();
-
-        await using var fs = File.OpenRead(path);
-        using var reader = new StreamReader(fs);
-        var json = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
-        var list = JsonConvert.DeserializeObject<List<StoredXRayClient>>(json, JsonOpts);
-        return list ?? new List<StoredXRayClient>();
-    }
-
-    private static async Task SaveStoreAsync(string dataDir, List<StoredXRayClient> store, CancellationToken ct)
-    {
-        var path = GetStorePath(dataDir);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var json = JsonConvert.SerializeObject(store, JsonOpts);
-        await File.WriteAllTextAsync(path, json, ct).ConfigureAwait(false);
-    }
-
-    private static string GetStorePath(string dataDir) =>
-        Path.Combine(Path.GetFullPath(dataDir), "xray", "clients.store.json");
 }

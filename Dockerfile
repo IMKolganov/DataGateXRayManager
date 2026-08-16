@@ -31,6 +31,7 @@ RUN apt-get update && \
         unzip \
         nano \
         jq \
+        iproute2 \
         && rm -rf /var/lib/apt/lists/*
 
 # Latest stable GitHub release if XRAY_VERSION build-arg is empty; override e.g. --build-arg XRAY_VERSION=26.3.27
@@ -60,8 +61,9 @@ WORKDIR /app
 COPY --from=publish /app/publish .
 
 COPY scripts/xray/render-config.sh /scripts/xray/render-config.sh
+COPY scripts/xray/sync-dns-identity.sh /scripts/xray/sync-dns-identity.sh
 COPY entrypoint.sh /entrypoint.sh
-RUN sed -i 's/\r$//' /entrypoint.sh /scripts/xray/render-config.sh && \
-    chmod +x /entrypoint.sh /scripts/xray/render-config.sh
+RUN sed -i 's/\r$//' /entrypoint.sh /scripts/xray/render-config.sh /scripts/xray/sync-dns-identity.sh && \
+    chmod +x /entrypoint.sh /scripts/xray/render-config.sh /scripts/xray/sync-dns-identity.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

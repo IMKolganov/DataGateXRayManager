@@ -18,6 +18,8 @@ internal sealed class PiHoleEnvOverrides
 
     public string? ClientSubnetPrefix { get; init; }
 
+    public string? ClientSubnetExcludePrefixes { get; init; }
+
     public bool HasAny =>
         Enabled.HasValue ||
         !string.IsNullOrWhiteSpace(BaseUrl) ||
@@ -25,7 +27,8 @@ internal sealed class PiHoleEnvOverrides
         PollIntervalSeconds.HasValue ||
         BatchSize.HasValue ||
         LookbackSeconds.HasValue ||
-        !string.IsNullOrWhiteSpace(ClientSubnetPrefix);
+        !string.IsNullOrWhiteSpace(ClientSubnetPrefix) ||
+        !string.IsNullOrWhiteSpace(ClientSubnetExcludePrefixes);
 
     public static PiHoleEnvOverrides FromConfiguration(IConfiguration config)
     {
@@ -59,6 +62,9 @@ internal sealed class PiHoleEnvOverrides
         var subnet = FirstNonEmpty(
             config["PIHOLE_CLIENT_SUBNET_PREFIX"],
             Environment.GetEnvironmentVariable("PiHole__ClientSubnetPrefix"));
+        var subnetExcludes = FirstNonEmpty(
+            config["PIHOLE_CLIENT_SUBNET_EXCLUDE_PREFIXES"],
+            Environment.GetEnvironmentVariable("PiHole__ClientSubnetExcludePrefixes"));
 
         return new PiHoleEnvOverrides
         {
@@ -68,7 +74,8 @@ internal sealed class PiHoleEnvOverrides
             PollIntervalSeconds = pollInterval,
             BatchSize = batchSize,
             LookbackSeconds = lookback,
-            ClientSubnetPrefix = subnet
+            ClientSubnetPrefix = subnet,
+            ClientSubnetExcludePrefixes = subnetExcludes
         };
     }
 
@@ -94,6 +101,9 @@ internal sealed class PiHoleEnvOverrides
 
         if (!string.IsNullOrWhiteSpace(ClientSubnetPrefix))
             options.ClientSubnetPrefix = ClientSubnetPrefix;
+
+        if (!string.IsNullOrWhiteSpace(ClientSubnetExcludePrefixes))
+            options.ClientSubnetExcludePrefixes = ClientSubnetExcludePrefixes;
     }
 
     public static void ApplyLegacyEnv(IConfiguration config, PiHoleOptions options) =>

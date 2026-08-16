@@ -160,7 +160,8 @@ public sealed class PiHoleRuntimeOptionsStore : IPiHoleRuntimeOptionsStore
         PollIntervalSeconds = source.PollIntervalSeconds,
         BatchSize = source.BatchSize,
         LookbackSeconds = source.LookbackSeconds,
-        ClientSubnetPrefix = source.ClientSubnetPrefix
+        ClientSubnetPrefix = source.ClientSubnetPrefix,
+        ClientSubnetExcludePrefixes = source.ClientSubnetExcludePrefixes
     };
 
     private sealed class PiHoleRuntimeConfigFile
@@ -179,6 +180,8 @@ public sealed class PiHoleRuntimeOptionsStore : IPiHoleRuntimeOptionsStore
 
         public string ClientSubnetPrefix { get; set; } = string.Empty;
 
+        public string ClientSubnetExcludePrefixes { get; set; } = string.Empty;
+
         public DateTimeOffset AppliedAtUtc { get; set; }
 
         public static PiHoleRuntimeConfigFile FromOptions(PiHoleOptions options, DateTimeOffset appliedAtUtc) => new()
@@ -190,6 +193,7 @@ public sealed class PiHoleRuntimeOptionsStore : IPiHoleRuntimeOptionsStore
             BatchSize = options.BatchSize,
             LookbackSeconds = options.LookbackSeconds,
             ClientSubnetPrefix = options.ClientSubnetPrefix,
+            ClientSubnetExcludePrefixes = options.ClientSubnetExcludePrefixes,
             AppliedAtUtc = appliedAtUtc.ToUniversalTime()
         };
 
@@ -201,7 +205,8 @@ public sealed class PiHoleRuntimeOptionsStore : IPiHoleRuntimeOptionsStore
             PollIntervalSeconds = PollIntervalSeconds > 0 ? PollIntervalSeconds : 60,
             BatchSize = BatchSize > 0 ? BatchSize : 200,
             LookbackSeconds = LookbackSeconds >= 0 ? LookbackSeconds : 120,
-            ClientSubnetPrefix = ClientSubnetPrefix
+            ClientSubnetPrefix = ClientSubnetPrefix,
+            ClientSubnetExcludePrefixes = ClientSubnetExcludePrefixes
         };
     }
 }

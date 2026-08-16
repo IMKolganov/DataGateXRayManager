@@ -14,6 +14,10 @@ public static class ServiceConfiguration
     {
         services.AddScoped<IClientLinkService, ClientLinkService>();
 
+        services.AddSingleton<IXrayClientStoreLock, XrayClientStoreLock>();
+        services.AddSingleton<IXrayClientStore, XrayClientStore>();
+        services.AddSingleton<IXrayDnsIdentityScriptRunner, ProcessXrayDnsIdentityScriptRunner>();
+        services.AddSingleton<IXrayDnsIdentitySyncService, XrayDnsIdentitySyncService>();
         services.AddScoped<IXRayUserService, XRayUserService>();
         services.AddScoped<IXRayActiveSessionsService, XRayActiveSessionsService>();
 

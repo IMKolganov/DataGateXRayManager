@@ -1,6 +1,5 @@
 using DataGateXRayManager.Hubs;
 using DataGateXRayManager.Models;
-using DataGateMonitor.SharedModels.DataGateOpenVpnManager.PiHole.Dto;
 using DataGateMonitor.SharedModels.DataGateOpenVpnManager.PiHole.Requests;
 using Microsoft.AspNetCore.SignalR;
 
@@ -9,13 +8,14 @@ namespace DataGateXRayManager.Services.PiHole;
 /// <summary>
 /// Polls Pi-hole on the Xray host and forwards DNS batches to the dashboard via SignalR
 /// (<c>DnsQueriesReceived</c> on <see cref="XRayEventHub"/>), same pattern as OpenVPN.
-/// CommonName is left null until Xray exposes a Pi-hole-visible per-client IP.
+/// CommonName comes from store IdentityIp matching (requires XRAY_DNS_IDENTITY_* + client DNS via tunnel).
 /// </summary>
 public sealed class PiHoleQueryCollectorHostedService(
     IPiHoleRuntimeOptionsStore runtimeOptions,
     IPiHoleApiClient piHoleApiClient,
     IPiHoleQueryCursorStore cursorStore,
     IPiHoleCollectorStatusStore statusStore,
+    IPiHoleClientIdentityResolver identityResolver,
     IHubContext<XRayEventHub> eventHub,
     ILogger<PiHoleQueryCollectorHostedService> logger) : BackgroundService
 {
@@ -55,13 +55,20 @@ public sealed class PiHoleQueryCollectorHostedService(
             {
                 _collectorActive = true;
                 statusStore.SetCollectorRunning(true);
+                if (string.IsNullOrWhiteSpace(cfg.ClientSubnetPrefix))
+                {
+                    logger.LogWarning(
+                        "Pi-hole ClientSubnetPrefix is empty — Xray will not ingest DNS rows (shared Pi-hole would include OpenVPN clients). Set prefix to identity pool (e.g. 10.80.0.) when using XRAY_DNS_IDENTITY_*.");
+                }
+
                 logger.LogInformation(
-                    "Pi-hole DNS collector started. BaseUrl={BaseUrl}, IntervalSec={IntervalSec}, BatchSize={BatchSize}, LookbackSec={LookbackSec}, SubnetPrefix={SubnetPrefix}",
+                    "Pi-hole DNS collector started. BaseUrl={BaseUrl}, IntervalSec={IntervalSec}, BatchSize={BatchSize}, LookbackSec={LookbackSec}, SubnetPrefix={SubnetPrefix}, ExcludePrefixes={ExcludePrefixes}",
                     cfg.BaseUrl,
                     cfg.PollIntervalSeconds,
                     cfg.BatchSize,
                     cfg.LookbackSeconds,
-                    cfg.ClientSubnetPrefix);
+                    cfg.ClientSubnetPrefix,
+                    cfg.ClientSubnetExcludePrefixes);
             }
 
             var interval = TimeSpan.FromSeconds(Math.Max(10, cfg.PollIntervalSeconds));
@@ -132,41 +139,52 @@ public sealed class PiHoleQueryCollectorHostedService(
             return 0;
         }
 
-        // No tun VirtualAddress on Xray — forward IP/domain rows with CommonName null.
-        var queries = records.Select(r => new DnsQueryEventDto
+        var enriched = await identityResolver.EnrichAsync(records, cancellationToken);
+        var mapped = enriched.Where(q => !string.IsNullOrWhiteSpace(q.CommonName)).ToList();
+
+        cursorStore.SaveLastUntilUtc(untilUtc);
+
+        if (mapped.Count == 0)
         {
-            PiHoleQueryId = r.PiHoleQueryId,
-            ClientIp = r.ClientIp,
-            CommonName = null,
-            Domain = r.Domain,
-            QueryType = r.QueryType,
-            Status = r.Status,
-            QueriedAtUtc = r.QueriedAtUtc
-        }).ToList();
+            statusStore.RecordPollSuccess(new PiHolePollSuccessResult
+            {
+                AtUtc = pollStarted,
+                QueriesFetched = fetch.TotalFromApi,
+                QueriesAfterFilter = records.Count,
+                QueriesEnriched = 0,
+                QueriesForwarded = 0,
+                CursorUntilUtc = untilUtc
+            });
+            logger.LogInformation(
+                "Pi-hole poll OK: apiTotal={ApiTotal}, afterFilter={AfterFilter}, enriched=0, forwarded=0 (no IdentityIp match — enable XRAY_DNS_IDENTITY_* and client DNS via tunnel)",
+                fetch.TotalFromApi,
+                records.Count);
+            return 0;
+        }
 
         var batch = new DnsQueryBatchRequest
         {
             CollectedAtUtc = DateTimeOffset.UtcNow,
-            Queries = queries
+            Queries = mapped
         };
 
         await eventHub.Clients.All.SendAsync("DnsQueriesReceived", batch, cancellationToken);
-        cursorStore.SaveLastUntilUtc(untilUtc);
         statusStore.RecordPollSuccess(new PiHolePollSuccessResult
         {
             AtUtc = pollStarted,
             QueriesFetched = fetch.TotalFromApi,
             QueriesAfterFilter = records.Count,
-            QueriesEnriched = 0,
-            QueriesForwarded = queries.Count,
+            QueriesEnriched = mapped.Count,
+            QueriesForwarded = mapped.Count,
             CursorUntilUtc = untilUtc
         });
 
         logger.LogInformation(
-            "Pi-hole poll OK: apiTotal={ApiTotal}, afterFilter={AfterFilter}, forwarded={Forwarded} (CN mapping N/A for Xray)",
+            "Pi-hole poll OK: apiTotal={ApiTotal}, afterFilter={AfterFilter}, enriched={Enriched}, forwarded={Forwarded}",
             fetch.TotalFromApi,
             records.Count,
-            queries.Count);
-        return queries.Count;
+            mapped.Count,
+            mapped.Count);
+        return mapped.Count;
     }
 }

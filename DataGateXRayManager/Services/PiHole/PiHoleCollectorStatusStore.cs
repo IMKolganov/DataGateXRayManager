@@ -98,6 +98,9 @@ public sealed class PiHoleCollectorStatusStore : IPiHoleCollectorStatusStore
         lock (_sync)
         {
             _runtimeConfigAppliedAtUtc = appliedAtUtc.ToUniversalTime();
+            // Drop stale poll errors from the previous BaseUrl / password so diagnostics
+            // do not keep showing "Connection refused (127.0.0.1…)" after Save & apply.
+            _lastPollError = null;
         }
     }
 

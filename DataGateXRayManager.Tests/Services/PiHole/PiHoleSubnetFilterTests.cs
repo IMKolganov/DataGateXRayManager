@@ -5,16 +5,15 @@ namespace DataGateXRayManager.Tests.Services.PiHole;
 public class PiHoleSubnetFilterTests
 {
     [Theory]
-    [InlineData("10.80.0.2", "10.80.0.", true)]
-    [InlineData("10.80.1.2", "10.80.0.", false)]
-    [InlineData("10.80.0.2", null, true)]
-    [InlineData("10.80.0.2", "", true)]
-    [InlineData("10.80.0.2", "   ", true)]
-    // StartsWith hazard: prefix "10.8" also matches "10.80..."
-    [InlineData("10.80.0.2", "10.8", true)]
-    [InlineData("10.9.0.2", "10.8", false)]
-    public void Matches_RespectsPrefix(string clientIp, string? prefix, bool expected) =>
-        Assert.Equal(expected, PiHoleSubnetFilter.Matches(clientIp, prefix));
+    [InlineData("10.80.0.2", "10.80.0.", false, true)]
+    [InlineData("10.80.1.2", "10.80.0.", false, false)]
+    [InlineData("10.80.0.2", null, false, true)]
+    [InlineData("10.80.0.2", "", false, true)]
+    [InlineData("10.80.0.2", null, true, false)]
+    [InlineData("10.80.0.2", "", true, false)]
+    [InlineData("10.80.0.2", "10.80.0.", true, true)]
+    public void Matches_RespectsPrefix(string clientIp, string? prefix, bool requirePrefix, bool expected) =>
+        Assert.Equal(expected, PiHoleSubnetFilter.Matches(clientIp, prefix, requirePrefix));
 
     [Fact]
     public void Apply_FiltersRecordsBySubnet()
@@ -33,7 +32,7 @@ public class PiHoleSubnetFilterTests
     }
 
     [Fact]
-    public void Apply_WhenPrefixEmpty_ReturnsAll()
+    public void Apply_WhenPrefixEmptyAndRequired_ReturnsNone()
     {
         var records = new[]
         {
@@ -41,7 +40,21 @@ public class PiHoleSubnetFilterTests
             new PiHoleQueryRecord(2, "172.20.0.2", "b.example", null, "FORWARDED", DateTimeOffset.UtcNow),
         };
 
-        var filtered = PiHoleSubnetFilter.Apply(records, null);
-        Assert.Equal(2, filtered.Count);
+        var filtered = PiHoleSubnetFilter.Apply(records, null, requirePrefix: true);
+        Assert.Empty(filtered);
+    }
+
+    [Fact]
+    public void ApplyExcludes_DropsOpenVpnLanPrefixes()
+    {
+        var records = new[]
+        {
+            new PiHoleQueryRecord(1, "10.51.15.7", "ovpn.example", null, "FORWARDED", DateTimeOffset.UtcNow),
+            new PiHoleQueryRecord(2, "10.80.0.2", "xray.example", null, "FORWARDED", DateTimeOffset.UtcNow),
+        };
+
+        var filtered = PiHoleSubnetFilter.ApplyExcludes(records, "10.51.15.,10.51.16.");
+        Assert.Single(filtered);
+        Assert.Equal("10.80.0.2", filtered[0].ClientIp);
     }
 }

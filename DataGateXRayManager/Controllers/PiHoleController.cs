@@ -36,7 +36,8 @@ public class PiHoleController(
             PollIntervalSeconds = request.PollIntervalSeconds > 0 ? request.PollIntervalSeconds : current.PollIntervalSeconds,
             BatchSize = request.BatchSize > 0 ? request.BatchSize : current.BatchSize,
             LookbackSeconds = request.LookbackSeconds >= 0 ? request.LookbackSeconds : current.LookbackSeconds,
-            ClientSubnetPrefix = request.ClientSubnetPrefix?.Trim() ?? current.ClientSubnetPrefix
+            ClientSubnetPrefix = request.ClientSubnetPrefix?.Trim() ?? current.ClientSubnetPrefix,
+            ClientSubnetExcludePrefixes = request.ClientSubnetExcludePrefixes?.Trim() ?? current.ClientSubnetExcludePrefixes
         };
 
         runtimeOptions.Apply(merged);
@@ -86,7 +87,8 @@ public class PiHoleController(
         PollIntervalSeconds = options.PollIntervalSeconds,
         BatchSize = options.BatchSize,
         LookbackSeconds = options.LookbackSeconds,
-        ClientSubnetPrefix = options.ClientSubnetPrefix
+        ClientSubnetPrefix = options.ClientSubnetPrefix,
+        ClientSubnetExcludePrefixes = options.ClientSubnetExcludePrefixes
     };
 }
 
@@ -107,4 +109,6 @@ public sealed class PiHoleOptionsDto
     public int LookbackSeconds { get; set; }
 
     public string ClientSubnetPrefix { get; set; } = string.Empty;
+
+    public string ClientSubnetExcludePrefixes { get; set; } = string.Empty;
 }

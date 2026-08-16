@@ -23,6 +23,7 @@ public static class PiHoleConfiguration
             sp.GetRequiredService<ILogger<PiHoleApiClient>>()));
 
         services.AddSingleton<IPiHoleQueryCursorStore, PiHoleQueryCursorStore>();
+        services.AddSingleton<IPiHoleClientIdentityResolver, PiHoleClientIdentityResolver>();
         services.AddHostedService<PiHoleQueryCollectorHostedService>();
     }
 }

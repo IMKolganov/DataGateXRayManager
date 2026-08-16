@@ -32,7 +32,21 @@ docker compose -f docker-compose-local.yml --env-file .env.dev.x64 up -d --build
 
 Image: `imkolganov/datagate-monitor-xray`.
 
-Key env (see compose): `XRayManagement__Host`, `XRayManagement__Port`, `Backend__BaseUrl`, `XRAY_TRANSPORT_MODE` (`plain` / `tls` / `reality`).
+Key env (see compose / `.env.example`): `XRayManagement__Host`, `XRayManagement__Port`, `Backend__BaseUrl`, `XRAY_TRANSPORT_MODE` (`plain` / `tls` / `reality`), `XRAY_ACCEPT_PROXY_PROTOCOL` (`true` when nginx stream uses `proxy_protocol on;`).
+
+### Pi-hole per-user DNS (identity IP)
+
+Same idea as OpenVPN VirtualAddress → CN:
+
+1. Set `DNS1`/`DNS2` to Pi-hole (reachable from the container).
+2. `XRAY_DNS_IDENTITY_ENABLED=true`, subnet `10.80.0.0/24` (default), container needs `NET_ADMIN`.
+   On a **shared** Pi-hole with multiple Xray nodes, give each node a **non-overlapping** subnet (e.g. `10.80.1.0/24`, `10.80.2.0/24`) and matching dashboard `ClientSubnetPrefix`.
+3. Dashboard Pi-hole subnet prefix: `10.80.0.` (or the node-specific prefix).
+4. Client VPN DNS must be that Pi-hole address through the VLESS tunnel (VLESS does not push dhcp-option DNS).
+5. Pi-hole must be able to **reply** to sources in `10.80.0.0/24` (same L2 as the Xray container aliases, or an explicit route). Otherwise DNS blackholes after `sendThrough`.
+6. Only classic DNS on **port 53** (tcp/udp) gets the per-user identity IP. DoH/DoT bypass this path.
+
+Manager allocates `IdentityIp` per client, adds iface aliases + Xray `sendThrough` rules for port 53, and enriches Pi-hole queries `ClientIp` → CommonName.
 
 ## License
 

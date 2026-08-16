@@ -13,6 +13,9 @@ services:
     ports:
       - "443:443"
       - "5010:5010"
+    # NET_ADMIN: required for XRAY_DNS_IDENTITY_* ip aliases (sendThrough → Pi-hole ClientIp).
+    cap_add:
+      - NET_ADMIN
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
       DATA_DIR: /data
@@ -22,10 +25,16 @@ services:
       XRayManagement__Host: "127.0.0.1"
       XRayManagement__Port: "10085"
       Backend__BaseUrl: "http://localhost:5581/"
-      DNS1: "8.8.8.8"
-      DNS2: "8.8.4.4"
+      # For Pi-hole matching set DNS1/DNS2 to Pi-hole (reachable from this container), not public resolvers.
+      DNS1: "${DNS1:-8.8.8.8}"
+      DNS2: "${DNS2:-8.8.4.4}"
+      # XRAY_DNS_IDENTITY_ENABLED: "true"
+      # XRAY_DNS_IDENTITY_SUBNET: "10.80.0.0/24"
+      # XRAY_DNS_IDENTITY_IFACE: "eth0"
       # plain | tls | reality — see scripts/xray/render-config.sh
       XRAY_TRANSPORT_MODE: "${XRAY_TRANSPORT_MODE:-plain}"
+      # nginx stream `proxy_protocol on;` → real client IP in Xray access / sessions
+      # XRAY_ACCEPT_PROXY_PROTOCOL: "true"
       # Optional: use a host file instead of generated config
       # XRAY_EXTERNAL_CONFIG_PATH: /data/xray/config.static.json
       # TLS mode: mount certs and set paths

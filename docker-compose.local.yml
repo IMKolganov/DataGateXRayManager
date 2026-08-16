@@ -17,6 +17,11 @@ services:
     ports:
       - "8443:443"
       - "15010:5010"
+    # NET_ADMIN: XRAY_DNS_IDENTITY_* ip aliases (sendThrough → Pi-hole ClientIp)
+    cap_add:
+      - NET_ADMIN
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       ASPNETCORE_ENVIRONMENT: Staging
       DATA_DIR: /data
@@ -26,8 +31,11 @@ services:
       XRayManagement__Host: "127.0.0.1"
       XRayManagement__Port: "10085"
       Backend__BaseUrl: ${BACKEND_BASE_URL:?Set BACKEND_BASE_URL in .env (see .env.example)}
-      DNS1: "8.8.8.8"
-      DNS2: "8.8.4.4"
+      DNS1: "${DNS1:-8.8.8.8}"
+      DNS2: "${DNS2:-8.8.4.4}"
+      XRAY_DNS_IDENTITY_ENABLED: "${XRAY_DNS_IDENTITY_ENABLED:-false}"
+      XRAY_DNS_IDENTITY_SUBNET: "${XRAY_DNS_IDENTITY_SUBNET:-10.80.0.0/24}"
+      XRAY_DNS_IDENTITY_IFACE: "${XRAY_DNS_IDENTITY_IFACE:-eth0}"
       XRAY_TRANSPORT_MODE: "plain"
 
 networks:

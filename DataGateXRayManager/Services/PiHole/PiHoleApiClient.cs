@@ -67,12 +67,15 @@ public sealed class PiHoleApiClient(
         }
 
         var totalFromApi = collected.Count;
-        var filtered = PiHoleSubnetFilter.Apply(collected, options.ClientSubnetPrefix);
+        var filtered = FilterForXrayNode(collected, options);
         if (totalFromApi != filtered.Count)
         {
             logger.LogDebug(
-                "Pi-hole queries subnet filter: fetched={Fetched}, afterFilter={AfterFilter}, prefix={Prefix}",
-                totalFromApi, filtered.Count, options.ClientSubnetPrefix);
+                "Pi-hole queries subnet filter: fetched={Fetched}, afterFilter={AfterFilter}, prefix={Prefix}, excludes={Excludes}",
+                totalFromApi,
+                filtered.Count,
+                options.ClientSubnetPrefix,
+                options.ClientSubnetExcludePrefixes);
         }
 
         return new PiHoleQueryFetchResult
@@ -112,7 +115,7 @@ public sealed class PiHoleApiClient(
                 return (false, 0, "Pi-hole queries request failed (see microservice logs for HTTP details).");
 
             var records = PiHoleQueryParser.ParseQueriesResponse(body);
-            var filtered = PiHoleSubnetFilter.Apply(records, options.ClientSubnetPrefix);
+            var filtered = FilterForXrayNode(records, options);
             return (true, filtered.Count, null);
         }
         catch (Exception ex)
@@ -272,6 +275,17 @@ public sealed class PiHoleApiClient(
 
     private static Uri BuildUri(PiHoleOptions options, string relative) =>
         new(new Uri(options.BaseUrl.TrimEnd('/') + "/"), relative);
+
+    /// <summary>
+    /// Xray shares Pi-hole with OpenVPN: empty include-prefix must not mean "all queries".
+    /// </summary>
+    internal static IReadOnlyList<PiHoleQueryRecord> FilterForXrayNode(
+        IEnumerable<PiHoleQueryRecord> records,
+        PiHoleOptions options)
+    {
+        var included = PiHoleSubnetFilter.Apply(records, options.ClientSubnetPrefix, requirePrefix: true);
+        return PiHoleSubnetFilter.ApplyExcludes(included, options.ClientSubnetExcludePrefixes);
+    }
 
     private static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..max] + "...";
