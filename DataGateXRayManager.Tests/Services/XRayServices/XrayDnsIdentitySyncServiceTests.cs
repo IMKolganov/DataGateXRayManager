@@ -104,6 +104,63 @@ public class XrayDnsIdentitySyncServiceTests
             var config = Config(
                 ("XRAY_DNS_IDENTITY_ENABLED", "true"),
                 ("XRAY_DNS_IDENTITY_SUBNET", "10.80.0.0/24"),
+                ("XRAY_DNS_IDENTITY_SYNC_DEBOUNCE_MS", "100"),
+                ("XRayManagement:Host", "127.0.0.1"),
+                ("XRayManagement:Port", "1"));
+
+            var paths = new Mock<IDataPathResolver>();
+            paths.Setup(x => x.GetDataPath()).Returns(dataDir);
+
+            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var runner = new Mock<IXrayDnsIdentityScriptRunner>();
+            runner.Setup(x => x.RunAsync(It.IsAny<XrayDnsIdentityScriptRequest>(), It.IsAny<CancellationToken>()))
+                .Returns(async () =>
+                {
+                    await gate.Task;
+                    return new XrayDnsIdentityScriptResult { ExitCode = 0, Stdout = "ok", Stderr = "" };
+                });
+
+            var users = new Mock<IXRayUserService>();
+            users.Setup(x => x.RehydrateClientsAsync(It.IsAny<IReadOnlyList<StoredXRayClient>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(1);
+
+            var sut = CreateSut(config, paths.Object, realStore, runner.Object, users.Object);
+            // Both tickets during shared debounce → coverThrough includes both → one script run.
+            var first = sut.SyncAsync(CancellationToken.None);
+            var second = sut.SyncAsync(CancellationToken.None);
+            gate.SetResult();
+            await Task.WhenAll(first, second);
+
+            runner.Verify(x => x.RunAsync(It.IsAny<XrayDnsIdentityScriptRequest>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+        finally
+        {
+            try { Directory.Delete(dataDir, true); } catch { /* ignore */ }
+        }
+    }
+
+    [Fact]
+    public async Task SyncAsync_TicketIssuedDuringFlight_DoesNotCoalesceAway()
+    {
+        var dataDir = Path.Combine(Path.GetTempPath(), "xray-sync-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dataDir, "xray"));
+        try
+        {
+            var realStore = new XrayClientStore(new XrayClientStoreLock());
+            await realStore.SaveAsync(dataDir,
+            [
+                new StoredXRayClient
+                {
+                    CommonName = "cn-1",
+                    Uuid = Guid.NewGuid().ToString(),
+                    IdentityIp = "10.80.0.2",
+                    IsRevoked = false
+                }
+            ], CancellationToken.None);
+
+            var config = Config(
+                ("XRAY_DNS_IDENTITY_ENABLED", "true"),
+                ("XRAY_DNS_IDENTITY_SUBNET", "10.80.0.0/24"),
                 ("XRAY_DNS_IDENTITY_SYNC_DEBOUNCE_MS", "0"),
                 ("XRayManagement:Host", "127.0.0.1"),
                 ("XRayManagement:Port", "1"));
@@ -126,12 +183,14 @@ public class XrayDnsIdentitySyncServiceTests
 
             var sut = CreateSut(config, paths.Object, realStore, runner.Object, users.Object);
             var first = sut.SyncAsync(CancellationToken.None);
-            await Task.Delay(50);
+            await Task.Delay(80);
+            // Ticket 2 arrives while ticket 1 still holds the lock / runs the script.
+            // Must not be marked completed by ticket 1's coverThrough snapshot.
             var second = sut.SyncAsync(CancellationToken.None);
             gate.SetResult();
             await Task.WhenAll(first, second);
 
-            runner.Verify(x => x.RunAsync(It.IsAny<XrayDnsIdentityScriptRequest>(), It.IsAny<CancellationToken>()), Times.Once);
+            runner.Verify(x => x.RunAsync(It.IsAny<XrayDnsIdentityScriptRequest>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
         }
         finally
         {

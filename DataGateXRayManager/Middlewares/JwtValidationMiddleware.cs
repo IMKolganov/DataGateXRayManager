@@ -39,12 +39,12 @@ public class JwtValidationMiddleware(RequestDelegate next)
         "/swagger",
         "/swagger/index.html",
         "/swagger/v1/swagger.json",
-        "/api/info",
         "/api/proxy"
     };
 
     private static readonly string[] LocalOnlyPaths =
     {
+        "/api/info",
         "/api/vpn-events/connect",
         "/api/vpn-events/disconnect",
         "/api/vpn-events/tlsverify",

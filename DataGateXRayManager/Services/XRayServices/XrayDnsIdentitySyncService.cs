@@ -93,6 +93,11 @@ public sealed class XrayDnsIdentitySyncService(
                 return;
             }
 
+            // Only coalesce tickets that already existed when we took the lock.
+            // Tickets issued later (new cert save → SyncAsync) must run again with a fresh store —
+            // never advance _lastCompletedGeneration to a generation that arrived mid-flight.
+            var coverThrough = Volatile.Read(ref _syncGeneration);
+
             var dataDir = Path.GetFullPath(dataPathResolver.GetDataPath());
             var store = await clientStore.LoadUnlockedAsync(dataDir, cancellationToken).ConfigureAwait(false);
             if (XrayDnsIdentityAllocator.EnsureIdentityIps(store, Subnet))
@@ -124,12 +129,13 @@ public sealed class XrayDnsIdentitySyncService(
                     $"DNS identity sync restarted Xray but rehydrate pushed {rehydrated}/{activeCount} client(s); VLESS users may be offline.");
             }
 
-            Volatile.Write(ref _lastCompletedGeneration, Volatile.Read(ref _syncGeneration));
+            Volatile.Write(ref _lastCompletedGeneration, coverThrough);
 
             logger.LogInformation(
-                "DNS identity sync complete: {Count} active identity IP(s), rehydrated={Rehydrated}.",
+                "DNS identity sync complete: {Count} active identity IP(s), rehydrated={Rehydrated}, coveredThrough={Covered}.",
                 activeCount,
-                rehydrated);
+                rehydrated,
+                coverThrough);
         }
         finally
         {
