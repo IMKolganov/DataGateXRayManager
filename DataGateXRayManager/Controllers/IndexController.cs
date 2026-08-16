@@ -2,6 +2,7 @@ using System.Reflection;
 using DataGateMonitor.SharedModels.DataGateXRayManager.Info;
 using DataGateMonitor.SharedModels.Responses;
 using DataGateXRayManager.Services.Interfaces;
+using DataGateXRayManager.Services.XRayServices;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DataGateXRayManager.Controllers;
@@ -31,6 +32,8 @@ public class IndexController(
                 logger.LogWarning(ex, "Failed to resolve PublicIp for /api/info");
             }
 
+            var dns1 = config["DNS1"];
+            var dns2 = config["DNS2"];
             var response = new RootXrayInfoResponse
             {
                 Version = version,
@@ -41,8 +44,10 @@ public class IndexController(
                 PublicIp = publicIp,
                 Config = new ConfigInfoResponse
                 {
-                    Dns1 = config["DNS1"],
-                    Dns2 = config["DNS2"],
+                    Dns1 = dns1,
+                    Dns2 = dns2,
+                    ClientDnsServers = XrayClientDnsInfo.BuildClientDnsServers(dns1, dns2),
+                    DnsIdentityEnabled = XrayClientDnsInfo.IsDnsIdentityEnabled(config),
                     VpnSubnet = config["VPN_SUBNET"],
                     VpnNetmask = config["VPN_NETMASK"],
                     DataDir = config["DATA_DIR"],

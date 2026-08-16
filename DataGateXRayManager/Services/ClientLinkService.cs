@@ -55,7 +55,7 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
         };
     }
 
-    public async Task<ClientLinkMetadata?> RevokeClientLink(string dataDir, string commonName, string fileName,
+    public async Task<ClientLinkMetadata> RevokeClientLink(string dataDir, string commonName, string fileName,
         string filePath, CancellationToken cancellationToken)
     {
         dataDir = Path.GetFullPath(dataDir);
@@ -199,7 +199,7 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
         return IPAddress.TryParse(h, out _);
     }
 
-    private static string GenerateLinkFile(
+    private string GenerateLinkFile(
         string configTemplate,
         string friendlyName,
         string serverIp,
@@ -207,12 +207,21 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
         ServerCertificate cert,
         string vlessUri)
     {
+        var dns1 = configuration["DNS1"] ?? "";
+        var dns2 = configuration["DNS2"] ?? "";
+        var clientDns = XrayClientDnsInfo.BuildClientDnsServers(dns1, dns2);
+        var dnsIdentity = XrayClientDnsInfo.IsDnsIdentityEnabled(configuration);
+
         return configTemplate
             .Replace("{{friendly_name}}", friendlyName, StringComparison.Ordinal)
             .Replace("{{server_ip}}", serverIp, StringComparison.Ordinal)
             .Replace("{{server_port}}", serverPort.ToString(), StringComparison.Ordinal)
             .Replace("{{uuid}}", cert.SerialNumber, StringComparison.Ordinal)
-            .Replace("{{vless_uri}}", vlessUri, StringComparison.Ordinal);
+            .Replace("{{vless_uri}}", vlessUri, StringComparison.Ordinal)
+            .Replace("{{dns1}}", dns1.Trim(), StringComparison.Ordinal)
+            .Replace("{{dns2}}", dns2.Trim(), StringComparison.Ordinal)
+            .Replace("{{dns_servers_json}}", XrayClientDnsInfo.ToDnsServersJson(clientDns), StringComparison.Ordinal)
+            .Replace("{{dns_identity_enabled}}", dnsIdentity ? "true" : "false", StringComparison.Ordinal);
     }
 
     private static string MoveRevokedLink(string linkFileName, string linkFilePath, string dataDir)
