@@ -124,9 +124,23 @@ public sealed class PiHoleQueryCollectorHostedService(
             cancellationToken);
 
         var records = fetch.Records;
+        // When the API window was truncated by BatchSize, only advance to the newest fetched row
+        // so the remainder is retried on the next poll (lookback dedupes overlaps).
+        var cursorTarget = untilUtc;
+        if (fetch.MayHaveMore)
+        {
+            cursorTarget = fetch.NewestFetchedAtUtc
+                           ?? (records.Count > 0 ? records.Max(r => r.QueriedAtUtc) : untilUtc);
+            logger.LogWarning(
+                "Pi-hole poll hit BatchSize={BatchSize} (apiTotal={ApiTotal}); advancing cursor only to {Cursor:o} to avoid skipping queries.",
+                cfg.BatchSize,
+                fetch.TotalFromApi,
+                cursorTarget);
+        }
+
         if (records.Count == 0)
         {
-            cursorStore.SaveLastUntilUtc(untilUtc);
+            cursorStore.SaveLastUntilUtc(cursorTarget);
             statusStore.RecordPollSuccess(new PiHolePollSuccessResult
             {
                 AtUtc = pollStarted,
@@ -134,7 +148,7 @@ public sealed class PiHoleQueryCollectorHostedService(
                 QueriesAfterFilter = 0,
                 QueriesEnriched = 0,
                 QueriesForwarded = 0,
-                CursorUntilUtc = untilUtc
+                CursorUntilUtc = cursorTarget
             });
             return 0;
         }
@@ -142,10 +156,9 @@ public sealed class PiHoleQueryCollectorHostedService(
         var enriched = await identityResolver.EnrichAsync(records, cancellationToken);
         var mapped = enriched.Where(q => !string.IsNullOrWhiteSpace(q.CommonName)).ToList();
 
-        cursorStore.SaveLastUntilUtc(untilUtc);
-
         if (mapped.Count == 0)
         {
+            cursorStore.SaveLastUntilUtc(cursorTarget);
             statusStore.RecordPollSuccess(new PiHolePollSuccessResult
             {
                 AtUtc = pollStarted,
@@ -153,7 +166,7 @@ public sealed class PiHoleQueryCollectorHostedService(
                 QueriesAfterFilter = records.Count,
                 QueriesEnriched = 0,
                 QueriesForwarded = 0,
-                CursorUntilUtc = untilUtc
+                CursorUntilUtc = cursorTarget
             });
             logger.LogInformation(
                 "Pi-hole poll OK: apiTotal={ApiTotal}, afterFilter={AfterFilter}, enriched=0, forwarded=0 (no IdentityIp match — enable XRAY_DNS_IDENTITY_* and client DNS via tunnel)",
@@ -168,7 +181,9 @@ public sealed class PiHoleQueryCollectorHostedService(
             Queries = mapped
         };
 
+        // Cursor advances only after SignalR accepts the send — otherwise retry the same window.
         await eventHub.Clients.All.SendAsync("DnsQueriesReceived", batch, cancellationToken);
+        cursorStore.SaveLastUntilUtc(cursorTarget);
         statusStore.RecordPollSuccess(new PiHolePollSuccessResult
         {
             AtUtc = pollStarted,
@@ -176,7 +191,7 @@ public sealed class PiHoleQueryCollectorHostedService(
             QueriesAfterFilter = records.Count,
             QueriesEnriched = mapped.Count,
             QueriesForwarded = mapped.Count,
-            CursorUntilUtc = untilUtc
+            CursorUntilUtc = cursorTarget
         });
 
         logger.LogInformation(

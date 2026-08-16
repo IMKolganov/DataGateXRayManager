@@ -30,8 +30,11 @@ public sealed class XrayStoreRehydrateHostedService(
         }
         catch (Exception ex)
         {
-            logger.LogCritical(ex, "Xray store rehydrate / DNS identity sync failed at startup.");
-            throw;
+            // Soft-fail: keep the manager API up so ops can fix NET_ADMIN / iface / Pi-hole prefix
+            // without a crash-loop. Identity routing may be degraded until the next successful Sync.
+            logger.LogCritical(
+                ex,
+                "Xray store rehydrate / DNS identity sync failed at startup; continuing with degraded DNS identity.");
         }
     }
 

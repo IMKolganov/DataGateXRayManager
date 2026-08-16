@@ -107,6 +107,29 @@ public class XRayUserServiceDnsIdentityTests
         }
     }
 
+    [Fact]
+    public async Task BuildCertificateAsync_IdentitySyncFails_RollsBackStore()
+    {
+        var dataDir = Path.Combine(Path.GetTempPath(), "xray-user-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dataDir, "xray"));
+        try
+        {
+            var (sut, _, sync, store) = CreateSut(dataDir, identityEnabled: true);
+            sync.Setup(x => x.SyncAsync(It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("sync failed"));
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                sut.BuildCertificateAsync(dataDir, CancellationToken.None, "user-rollback"));
+
+            var loaded = await store.LoadAsync(dataDir, CancellationToken.None);
+            Assert.DoesNotContain(loaded, c => c.CommonName == "user-rollback");
+        }
+        finally
+        {
+            try { Directory.Delete(dataDir, true); } catch { /* ignore */ }
+        }
+    }
+
     private static (
         XRayUserService Sut,
         Mock<IXRayProcessApiRunner> Api,

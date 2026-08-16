@@ -67,6 +67,10 @@ public sealed class PiHoleApiClient(
         }
 
         var totalFromApi = collected.Count;
+        var mayHaveMore = collected.Count >= maxCount;
+        DateTimeOffset? newestFetched = collected.Count > 0
+            ? collected.Max(r => r.QueriedAtUtc)
+            : null;
         var filtered = FilterForXrayNode(collected, options);
         if (totalFromApi != filtered.Count)
         {
@@ -81,7 +85,9 @@ public sealed class PiHoleApiClient(
         return new PiHoleQueryFetchResult
         {
             Records = filtered,
-            TotalFromApi = totalFromApi
+            TotalFromApi = totalFromApi,
+            MayHaveMore = mayHaveMore,
+            NewestFetchedAtUtc = newestFetched
         };
     }
 

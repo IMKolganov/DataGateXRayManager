@@ -11,7 +11,7 @@ public interface IXrayDnsIdentitySyncService
 
     /// <summary>
     /// Backfill identity IPs, apply iface aliases + sendThrough routing via script, restart Xray, rehydrate clients.
-    /// No-op when identity is disabled. Concurrent callers coalesce into one restart covering the latest store.
+    /// No-op when identity is disabled. Concurrent callers coalesce; requests within the debounce window share one restart.
     /// </summary>
     Task SyncAsync(CancellationToken cancellationToken);
 }
@@ -45,6 +45,19 @@ public sealed class XrayDnsIdentitySyncService(
                                  ?? configuration["Xray:DnsIdentity:SyncScript"]
                                  ?? "/scripts/xray/sync-dns-identity.sh";
 
+    /// <summary>Wait after the last SyncAsync request before restarting Xray (coalesces sequential cert churn).</summary>
+    private int DebounceMilliseconds
+    {
+        get
+        {
+            var raw = configuration["XRAY_DNS_IDENTITY_SYNC_DEBOUNCE_MS"]
+                      ?? configuration["Xray:DnsIdentity:SyncDebounceMs"];
+            if (int.TryParse(raw, out var ms) && ms >= 0)
+                return Math.Min(ms, 60_000);
+            return 2_000;
+        }
+    }
+
     public async Task SyncAsync(CancellationToken cancellationToken)
     {
         if (!IsEnabled)
@@ -54,13 +67,23 @@ public sealed class XrayDnsIdentitySyncService(
         }
 
         var myTicket = Interlocked.Increment(ref _syncGeneration);
+        var debounceMs = DebounceMilliseconds;
+        if (debounceMs > 0)
+        {
+            logger.LogDebug(
+                "DNS identity sync debouncing {DebounceMs}ms (ticket={Ticket}).",
+                debounceMs,
+                myTicket);
+            await Task.Delay(debounceMs, cancellationToken).ConfigureAwait(false);
+        }
+
         WarnIfDnsLooksPublic();
-        WarnIfPiHolePrefixMisaligned();
+        EnsurePiHolePrefixAlignedOrThrow();
 
         await storeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            // Another waiter already synced a store state that includes our request.
+            // Covered by a sync that finished while we waited on debounce / lock.
             if (Volatile.Read(ref _lastCompletedGeneration) >= myTicket)
             {
                 logger.LogDebug(
@@ -70,7 +93,6 @@ public sealed class XrayDnsIdentitySyncService(
                 return;
             }
 
-            var activeCount = 0;
             var dataDir = Path.GetFullPath(dataPathResolver.GetDataPath());
             var store = await clientStore.LoadUnlockedAsync(dataDir, cancellationToken).ConfigureAwait(false);
             if (XrayDnsIdentityAllocator.EnsureIdentityIps(store, Subnet))
@@ -88,7 +110,7 @@ public sealed class XrayDnsIdentitySyncService(
                         ["commonName"] = c.CommonName,
                         ["identityIp"] = c.IdentityIp
                     })).ToString(Formatting.None);
-            activeCount = activeClients.Count;
+            var activeCount = activeClients.Count;
             await RunSyncScriptAsync(clientsJson, cancellationToken).ConfigureAwait(false);
             await WaitForXrayApiAsync(cancellationToken).ConfigureAwait(false);
 
@@ -102,7 +124,6 @@ public sealed class XrayDnsIdentitySyncService(
                     $"DNS identity sync restarted Xray but rehydrate pushed {rehydrated}/{activeCount} client(s); VLESS users may be offline.");
             }
 
-            // Cover all tickets queued while we held the lock / ran the script.
             Volatile.Write(ref _lastCompletedGeneration, Volatile.Read(ref _syncGeneration));
 
             logger.LogInformation(
@@ -128,28 +149,23 @@ public sealed class XrayDnsIdentitySyncService(
         }
     }
 
-    private void WarnIfPiHolePrefixMisaligned()
+    private void EnsurePiHolePrefixAlignedOrThrow()
     {
         var prefix = piHoleRuntimeOptions.GetEffective().ClientSubnetPrefix;
         var suggested = XrayDnsIdentityAllocator.SuggestedClientSubnetPrefix(Subnet);
         if (string.IsNullOrWhiteSpace(prefix))
         {
-            logger.LogWarning(
-                "XRAY_DNS_IDENTITY_ENABLED is on but Pi-hole ClientSubnetPrefix is empty — " +
-                "the node will ingest no DNS rows. Set prefix to the identity pool (e.g. {Suggested}).",
-                suggested ?? "10.80.0.");
-            return;
+            throw new InvalidOperationException(
+                "XRAY_DNS_IDENTITY_ENABLED requires Pi-hole ClientSubnetPrefix matching the identity pool " +
+                $"(suggested '{suggested ?? "10.80.0."}'). Empty prefix would ingest nothing or risk shared-Pi-hole mixups.");
         }
 
         if (XrayDnsIdentityAllocator.ClientSubnetPrefixCoversIdentityPool(prefix, Subnet))
             return;
 
-        logger.LogWarning(
-            "Pi-hole ClientSubnetPrefix={Prefix} does not cover XRAY_DNS_IDENTITY_SUBNET={Subnet}. " +
-            "On a shared Pi-hole use a non-overlapping subnet per node and matching prefix (suggested {Suggested}).",
-            prefix,
-            Subnet,
-            suggested ?? "(n/a)");
+        throw new InvalidOperationException(
+            $"Pi-hole ClientSubnetPrefix '{prefix}' does not cover XRAY_DNS_IDENTITY_SUBNET '{Subnet}'. " +
+            $"Use a non-overlapping subnet per node and matching prefix (suggested '{suggested ?? "(n/a)"}').");
     }
 
     private async Task RunSyncScriptAsync(string clientsJson, CancellationToken cancellationToken)

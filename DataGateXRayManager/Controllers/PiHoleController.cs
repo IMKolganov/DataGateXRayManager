@@ -1,5 +1,6 @@
 using DataGateXRayManager.Models;
 using DataGateXRayManager.Services.PiHole;
+using DataGateXRayManager.Services.XRayServices;
 using DataGateMonitor.SharedModels.DataGateOpenVpnManager.Diagnostics.Responses;
 using DataGateMonitor.SharedModels.Responses;
 using Microsoft.AspNetCore.Mvc;
@@ -13,6 +14,8 @@ public class PiHoleController(
     IPiHoleApiClient piHoleApiClient,
     IPiHoleCollectorStatusStore statusStore,
     IPiHoleQueryCursorStore cursorStore,
+    IXrayDnsIdentitySyncService dnsIdentitySync,
+    IConfiguration configuration,
     ILogger<PiHoleController> logger) : ControllerBase
 {
     [HttpGet("config")]
@@ -39,6 +42,22 @@ public class PiHoleController(
             ClientSubnetPrefix = request.ClientSubnetPrefix?.Trim() ?? current.ClientSubnetPrefix,
             ClientSubnetExcludePrefixes = request.ClientSubnetExcludePrefixes?.Trim() ?? current.ClientSubnetExcludePrefixes
         };
+
+        try
+        {
+            if (merged.Enabled && string.IsNullOrWhiteSpace(merged.BaseUrl))
+                throw new InvalidOperationException("Pi-hole BaseUrl is required when the collector is enabled.");
+
+            if (!string.IsNullOrWhiteSpace(merged.BaseUrl))
+                PiHoleBaseUrlGuard.EnsureSafeOrThrow(merged.BaseUrl);
+
+            if (dnsIdentitySync.IsEnabled)
+                EnsureIdentityPrefixOrThrow(merged.ClientSubnetPrefix);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ApiResponse<PiHoleOptionsDto>.ErrorResponse(ex.Message));
+        }
 
         runtimeOptions.Apply(merged);
         statusStore.RecordConfigApplied(DateTimeOffset.UtcNow);
@@ -67,14 +86,36 @@ public class PiHoleController(
                 cursorStore.GetLastUntilUtc(),
                 probe,
                 runtimeOptions.PersistedAppliedAtUtc);
-            response.HealthMessage =
-                "Xray node collector; per-user CN mapping is not available yet (DNS rows keyed by client IP).";
+            response.HealthMessage = dnsIdentitySync.IsEnabled
+                ? "Xray node collector; CN via IdentityIp when client DNS uses Pi-hole through the tunnel."
+                : "Xray node collector; enable XRAY_DNS_IDENTITY_* for per-user CN mapping via IdentityIp.";
             return Ok(ApiResponse<PiHoleDiagnosticsResponse>.SuccessResponse(response));
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "Pi-hole diagnostics request failed.");
             return BadRequest(ApiResponse<PiHoleDiagnosticsResponse>.ErrorResponse(ex.Message));
+        }
+    }
+
+    private void EnsureIdentityPrefixOrThrow(string? prefix)
+    {
+        var subnet = configuration["XRAY_DNS_IDENTITY_SUBNET"]
+                     ?? configuration["Xray:DnsIdentity:Subnet"]
+                     ?? XrayDnsIdentityAllocator.DefaultSubnetCidr;
+        var suggested = XrayDnsIdentityAllocator.SuggestedClientSubnetPrefix(subnet);
+        if (string.IsNullOrWhiteSpace(prefix))
+        {
+            throw new InvalidOperationException(
+                "XRAY_DNS_IDENTITY_ENABLED requires ClientSubnetPrefix " +
+                $"(suggested '{suggested ?? "10.80.0."}').");
+        }
+
+        if (!XrayDnsIdentityAllocator.ClientSubnetPrefixCoversIdentityPool(prefix, subnet))
+        {
+            throw new InvalidOperationException(
+                $"ClientSubnetPrefix '{prefix}' does not cover identity subnet '{subnet}' " +
+                $"(suggested '{suggested ?? "(n/a)"}').");
         }
     }
 

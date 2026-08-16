@@ -126,7 +126,15 @@ public class XRayUserService(
 
         if (dnsIdentitySync.IsEnabled)
         {
-            await dnsIdentitySync.SyncAsync(cancellationToken);
+            try
+            {
+                await dnsIdentitySync.SyncAsync(cancellationToken);
+            }
+            catch
+            {
+                await RollbackNewClientAsync(dataDir, client, cancellationToken).ConfigureAwait(false);
+                throw;
+            }
         }
         else
         {
@@ -138,6 +146,29 @@ public class XRayUserService(
             "XRay VLESS client created: CN={CommonName}, UUID={Uuid}, IdentityIp={IdentityIp}",
             client.CommonName, client.Uuid, client.IdentityIp ?? "(none)");
         return MapToServerCertificate(client);
+    }
+
+    private async Task RollbackNewClientAsync(string dataDir, StoredXRayClient client, CancellationToken cancellationToken)
+    {
+        await storeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var store = await clientStore.LoadUnlockedAsync(dataDir, cancellationToken).ConfigureAwait(false);
+            var removed = store.RemoveAll(c =>
+                string.Equals(c.Uuid, client.Uuid, StringComparison.OrdinalIgnoreCase));
+            if (removed > 0)
+            {
+                await clientStore.SaveUnlockedAsync(dataDir, store, cancellationToken).ConfigureAwait(false);
+                logger.LogWarning(
+                    "Rolled back Xray client {CommonName} (UUID={Uuid}) after DNS identity sync failure.",
+                    client.CommonName,
+                    client.Uuid);
+            }
+        }
+        finally
+        {
+            storeLock.Release();
+        }
     }
 
     public async Task<ServerCertificate> RevokeCertificateAsync(string dataDir, string commonName,

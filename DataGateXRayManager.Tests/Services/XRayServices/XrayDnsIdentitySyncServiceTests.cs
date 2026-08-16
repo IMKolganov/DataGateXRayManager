@@ -50,6 +50,7 @@ public class XrayDnsIdentitySyncServiceTests
                 ("XRAY_DNS_IDENTITY_ENABLED", "true"),
                 ("XRAY_DNS_IDENTITY_SUBNET", "10.80.0.0/24"),
                 ("XRAY_DNS_IDENTITY_SYNC_SCRIPT", "/bin/true"),
+                ("XRAY_DNS_IDENTITY_SYNC_DEBOUNCE_MS", "0"),
                 ("XRayManagement:Host", "127.0.0.1"),
                 ("XRayManagement:Port", "1"));
 
@@ -103,6 +104,7 @@ public class XrayDnsIdentitySyncServiceTests
             var config = Config(
                 ("XRAY_DNS_IDENTITY_ENABLED", "true"),
                 ("XRAY_DNS_IDENTITY_SUBNET", "10.80.0.0/24"),
+                ("XRAY_DNS_IDENTITY_SYNC_DEBOUNCE_MS", "0"),
                 ("XRayManagement:Host", "127.0.0.1"),
                 ("XRayManagement:Port", "1"));
 
@@ -135,6 +137,37 @@ public class XrayDnsIdentitySyncServiceTests
         {
             try { Directory.Delete(dataDir, true); } catch { /* ignore */ }
         }
+    }
+
+    [Fact]
+    public async Task SyncAsync_MisalignedPrefix_Throws()
+    {
+        var config = Config(
+            ("XRAY_DNS_IDENTITY_ENABLED", "true"),
+            ("XRAY_DNS_IDENTITY_SUBNET", "10.80.0.0/24"),
+            ("XRAY_DNS_IDENTITY_SYNC_DEBOUNCE_MS", "0"));
+        var paths = new Mock<IDataPathResolver>();
+        paths.Setup(x => x.GetDataPath()).Returns("/tmp");
+        var runner = new Mock<IXrayDnsIdentityScriptRunner>(MockBehavior.Strict);
+        var store = new Mock<IXrayClientStore>(MockBehavior.Strict);
+        var piHole = new Mock<IPiHoleRuntimeOptionsStore>();
+        piHole.Setup(x => x.GetEffective()).Returns(new PiHoleOptions { ClientSubnetPrefix = "10.80.1." });
+
+        var services = new ServiceCollection();
+        services.AddScoped(_ => Mock.Of<IXRayUserService>());
+        var sp = services.BuildServiceProvider();
+        var sut = new XrayDnsIdentitySyncService(
+            config,
+            paths.Object,
+            store.Object,
+            new XrayClientStoreLock(),
+            runner.Object,
+            piHole.Object,
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<XrayDnsIdentitySyncService>.Instance);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.SyncAsync(CancellationToken.None));
+        runner.VerifyNoOtherCalls();
     }
 
     private static IConfiguration Config(params (string Key, string? Value)[] pairs) =>
