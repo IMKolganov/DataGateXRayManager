@@ -87,4 +87,22 @@ public class IndexControllerTests
         Assert.True(response.Data.Config.DnsIdentityEnabled);
         Assert.Equal(["172.20.0.1", "8.8.4.4"], response.Data.Config.ClientDnsServers);
     }
+
+    [Fact]
+    public async Task Get_WithDnsButIdentityOff_StillExposesClientDnsServers()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DNS1"] = "1.1.1.1",
+            ["XRAY_DNS_IDENTITY_ENABLED"] = "false",
+        }).Build();
+
+        var controller = new IndexController(config, _env.Object, _logger.Object, _externalIp.Object);
+        var result = await controller.Get(CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<ApiResponse<RootXrayInfoResponse>>(ok.Value);
+        Assert.False(response.Data!.Config.DnsIdentityEnabled);
+        Assert.Equal(["1.1.1.1"], response.Data.Config.ClientDnsServers);
+    }
 }
