@@ -80,4 +80,31 @@ public class XrayDnsIdentityAllocatorTests
         Assert.Throws<InvalidOperationException>(() =>
             XrayDnsIdentityAllocator.EnsureIdentityIps(store, "10.80.0.0/31"));
     }
+
+    [Fact]
+    public void FindCommonNameByIdentityIp_DuplicateIdentityIp_ReturnsNull()
+    {
+        var store = new List<StoredXRayClient>
+        {
+            new() { CommonName = "user-a", Uuid = "1", IdentityIp = "10.80.0.5", IsRevoked = false },
+            new() { CommonName = "user-b", Uuid = "2", IdentityIp = "10.80.0.5", IsRevoked = false }
+        };
+
+        Assert.Null(XrayDnsIdentityAllocator.FindCommonNameByIdentityIp(store, "10.80.0.5"));
+    }
+
+    [Fact]
+    public void SuggestedClientSubnetPrefix_FromCidr()
+    {
+        Assert.Equal("10.80.0.", XrayDnsIdentityAllocator.SuggestedClientSubnetPrefix("10.80.0.0/24"));
+        Assert.Equal("10.80.1.", XrayDnsIdentityAllocator.SuggestedClientSubnetPrefix("10.80.1.0/24"));
+    }
+
+    [Fact]
+    public void ClientSubnetPrefixCoversIdentityPool_DetectsMismatch()
+    {
+        Assert.True(XrayDnsIdentityAllocator.ClientSubnetPrefixCoversIdentityPool("10.80.0.", "10.80.0.0/24"));
+        Assert.False(XrayDnsIdentityAllocator.ClientSubnetPrefixCoversIdentityPool("10.80.1.", "10.80.0.0/24"));
+        Assert.False(XrayDnsIdentityAllocator.ClientSubnetPrefixCoversIdentityPool("", "10.80.0.0/24"));
+    }
 }

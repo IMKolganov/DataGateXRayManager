@@ -1,4 +1,5 @@
 using DataGateXRayManager.Helpers;
+using DataGateXRayManager.Services.PiHole;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -10,7 +11,7 @@ public interface IXrayDnsIdentitySyncService
 
     /// <summary>
     /// Backfill identity IPs, apply iface aliases + sendThrough routing via script, restart Xray, rehydrate clients.
-    /// No-op when identity is disabled.
+    /// No-op when identity is disabled. Concurrent callers coalesce into one restart covering the latest store.
     /// </summary>
     Task SyncAsync(CancellationToken cancellationToken);
 }
@@ -21,6 +22,7 @@ public sealed class XrayDnsIdentitySyncService(
     IXrayClientStore clientStore,
     IXrayClientStoreLock storeLock,
     IXrayDnsIdentityScriptRunner scriptRunner,
+    IPiHoleRuntimeOptionsStore piHoleRuntimeOptions,
     IServiceScopeFactory scopeFactory,
     ILogger<XrayDnsIdentitySyncService> logger) : IXrayDnsIdentitySyncService
 {
@@ -28,6 +30,9 @@ public sealed class XrayDnsIdentitySyncService(
     {
         "8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1"
     };
+
+    private int _syncGeneration;
+    private int _lastCompletedGeneration;
 
     public bool IsEnabled => IsTruthy(configuration["XRAY_DNS_IDENTITY_ENABLED"]
                                       ?? configuration["Xray:DnsIdentity:Enabled"]);
@@ -48,12 +53,24 @@ public sealed class XrayDnsIdentitySyncService(
             return;
         }
 
+        var myTicket = Interlocked.Increment(ref _syncGeneration);
         WarnIfDnsLooksPublic();
+        WarnIfPiHolePrefixMisaligned();
 
-        var activeCount = 0;
         await storeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Another waiter already synced a store state that includes our request.
+            if (Volatile.Read(ref _lastCompletedGeneration) >= myTicket)
+            {
+                logger.LogDebug(
+                    "DNS identity sync coalesced (ticket={Ticket}, lastCompleted={Last}).",
+                    myTicket,
+                    _lastCompletedGeneration);
+                return;
+            }
+
+            var activeCount = 0;
             var dataDir = Path.GetFullPath(dataPathResolver.GetDataPath());
             var store = await clientStore.LoadUnlockedAsync(dataDir, cancellationToken).ConfigureAwait(false);
             if (XrayDnsIdentityAllocator.EnsureIdentityIps(store, Subnet))
@@ -85,6 +102,9 @@ public sealed class XrayDnsIdentitySyncService(
                     $"DNS identity sync restarted Xray but rehydrate pushed {rehydrated}/{activeCount} client(s); VLESS users may be offline.");
             }
 
+            // Cover all tickets queued while we held the lock / ran the script.
+            Volatile.Write(ref _lastCompletedGeneration, Volatile.Read(ref _syncGeneration));
+
             logger.LogInformation(
                 "DNS identity sync complete: {Count} active identity IP(s), rehydrated={Rehydrated}.",
                 activeCount,
@@ -106,6 +126,30 @@ public sealed class XrayDnsIdentitySyncService(
                 "Set DNS1/DNS2 to Pi-hole and point client VPN DNS at that address through the tunnel.",
                 dns1);
         }
+    }
+
+    private void WarnIfPiHolePrefixMisaligned()
+    {
+        var prefix = piHoleRuntimeOptions.GetEffective().ClientSubnetPrefix;
+        var suggested = XrayDnsIdentityAllocator.SuggestedClientSubnetPrefix(Subnet);
+        if (string.IsNullOrWhiteSpace(prefix))
+        {
+            logger.LogWarning(
+                "XRAY_DNS_IDENTITY_ENABLED is on but Pi-hole ClientSubnetPrefix is empty — " +
+                "the node will ingest no DNS rows. Set prefix to the identity pool (e.g. {Suggested}).",
+                suggested ?? "10.80.0.");
+            return;
+        }
+
+        if (XrayDnsIdentityAllocator.ClientSubnetPrefixCoversIdentityPool(prefix, Subnet))
+            return;
+
+        logger.LogWarning(
+            "Pi-hole ClientSubnetPrefix={Prefix} does not cover XRAY_DNS_IDENTITY_SUBNET={Subnet}. " +
+            "On a shared Pi-hole use a non-overlapping subnet per node and matching prefix (suggested {Suggested}).",
+            prefix,
+            Subnet,
+            suggested ?? "(n/a)");
     }
 
     private async Task RunSyncScriptAsync(string clientsJson, CancellationToken cancellationToken)
