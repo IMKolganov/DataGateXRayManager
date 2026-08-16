@@ -5,6 +5,8 @@ namespace DataGateXRayManager.Tests.Services.PiHole;
 public class PiHoleSubnetFilterTests
 {
     [Theory]
+    [InlineData("10.80.0.2", "10.80.0", false, true)]
+    [InlineData("10.80.01.2", "10.80.0", false, false)]
     [InlineData("10.80.0.2", "10.80.0.", false, true)]
     [InlineData("10.80.1.2", "10.80.0.", false, false)]
     [InlineData("10.80.0.2", null, false, true)]
@@ -14,6 +16,13 @@ public class PiHoleSubnetFilterTests
     [InlineData("10.80.0.2", "10.80.0.", true, true)]
     public void Matches_RespectsPrefix(string clientIp, string? prefix, bool requirePrefix, bool expected) =>
         Assert.Equal(expected, PiHoleSubnetFilter.Matches(clientIp, prefix, requirePrefix));
+
+    [Theory]
+    [InlineData("10.80.0", "10.80.0.")]
+    [InlineData("10.80.0.", "10.80.0.")]
+    [InlineData(" 10.51.15 ", "10.51.15.")]
+    public void NormalizePrefix_AppendsTrailingDot(string raw, string expected) =>
+        Assert.Equal(expected, PiHoleSubnetFilter.NormalizePrefix(raw));
 
     [Fact]
     public void Apply_FiltersRecordsBySubnet()

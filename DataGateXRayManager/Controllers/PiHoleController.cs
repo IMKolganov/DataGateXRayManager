@@ -39,7 +39,8 @@ public class PiHoleController(
             PollIntervalSeconds = request.PollIntervalSeconds > 0 ? request.PollIntervalSeconds : current.PollIntervalSeconds,
             BatchSize = request.BatchSize > 0 ? request.BatchSize : current.BatchSize,
             LookbackSeconds = request.LookbackSeconds >= 0 ? request.LookbackSeconds : current.LookbackSeconds,
-            ClientSubnetPrefix = request.ClientSubnetPrefix?.Trim() ?? current.ClientSubnetPrefix,
+            ClientSubnetPrefix = NormalizeClientSubnetPrefix(
+                request.ClientSubnetPrefix?.Trim() ?? current.ClientSubnetPrefix),
             ClientSubnetExcludePrefixes = request.ClientSubnetExcludePrefixes?.Trim() ?? current.ClientSubnetExcludePrefixes
         };
 
@@ -117,6 +118,29 @@ public class PiHoleController(
                 $"ClientSubnetPrefix '{prefix}' does not cover identity subnet '{subnet}' " +
                 $"(suggested '{suggested ?? "(n/a)"}').");
         }
+    }
+
+    /// <summary>
+    /// Ensure trailing "." for IPv4 dotted prefixes so "10.80.0" matches identity hosts
+    /// the same way as "10.80.0." and does not match "10.80.01.x".
+    /// </summary>
+    internal static string NormalizeClientSubnetPrefix(string? raw)
+    {
+        var trimmed = (raw ?? "").Trim();
+        if (trimmed.Length == 0 || trimmed.EndsWith('.'))
+            return trimmed;
+
+        var looksLikeIpv4Prefix = true;
+        foreach (var part in trimmed.Split('.'))
+        {
+            if (part.Length is 0 or > 3 || !part.All(char.IsDigit))
+            {
+                looksLikeIpv4Prefix = false;
+                break;
+            }
+        }
+
+        return looksLikeIpv4Prefix ? trimmed + "." : trimmed;
     }
 
     private static PiHoleOptionsDto ToDto(PiHoleOptions options) => new()

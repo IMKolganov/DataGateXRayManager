@@ -11,7 +11,7 @@ public static class PiHoleSubnetFilter
         if (string.IsNullOrWhiteSpace(subnetPrefix))
             return !requirePrefix;
 
-        return clientIp.StartsWith(subnetPrefix.Trim(), StringComparison.Ordinal);
+        return clientIp.StartsWith(NormalizePrefix(subnetPrefix), StringComparison.Ordinal);
     }
 
     public static IReadOnlyList<PiHoleQueryRecord> Apply(
@@ -22,7 +22,7 @@ public static class PiHoleSubnetFilter
         if (string.IsNullOrWhiteSpace(subnetPrefix))
             return requirePrefix ? Array.Empty<PiHoleQueryRecord>() : records.ToList();
 
-        var prefix = subnetPrefix.Trim();
+        var prefix = NormalizePrefix(subnetPrefix);
         return records
             .Where(r => r.ClientIp.StartsWith(prefix, StringComparison.Ordinal))
             .ToList();
@@ -50,7 +50,28 @@ public static class PiHoleSubnetFilter
         return csv
             .Split([',', ';', '\n', '\r', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(s => s.Length > 0)
+            .Select(NormalizePrefix)
             .Distinct(StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>Append trailing '.' for IPv4 dotted prefixes (dashboard often omits it).</summary>
+    public static string NormalizePrefix(string? raw)
+    {
+        var trimmed = (raw ?? "").Trim();
+        if (trimmed.Length == 0 || trimmed.EndsWith('.'))
+            return trimmed;
+
+        var looksLikeIpv4Prefix = true;
+        foreach (var part in trimmed.Split('.'))
+        {
+            if (part.Length is 0 or > 3 || !part.All(char.IsDigit))
+            {
+                looksLikeIpv4Prefix = false;
+                break;
+            }
+        }
+
+        return looksLikeIpv4Prefix ? trimmed + "." : trimmed;
     }
 }

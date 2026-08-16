@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using DataGateXRayManager.Services.PiHole;
 
 namespace DataGateXRayManager.Services.XRayServices;
 
@@ -112,7 +113,7 @@ public static class XrayDnsIdentityAllocator
         if (string.IsNullOrWhiteSpace(clientSubnetPrefix))
             return false;
 
-        var prefix = clientSubnetPrefix.Trim();
+        var prefix = PiHoleSubnetFilter.NormalizePrefix(clientSubnetPrefix);
         var cidr = string.IsNullOrWhiteSpace(subnetCidr) ? DefaultSubnetCidr : subnetCidr.Trim();
         if (!TryParseCidr(cidr, out var network, out var prefixLength))
             return false;
