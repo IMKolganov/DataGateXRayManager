@@ -95,6 +95,8 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
         if (serverIp.Length == 0)
             return (serverIp, serverPort);
 
+        serverIp = StripMistakenUrlFromEndpoint(serverIp, ref serverPort);
+
         if (serverIp[0] == '[')
         {
             var end = serverIp.IndexOf(']', 1);
@@ -112,6 +114,24 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
         }
 
         return (serverIp, serverPort);
+    }
+
+    private static string StripMistakenUrlFromEndpoint(string serverIp, ref int serverPort)
+    {
+        var s = serverIp.Trim().TrimEnd('/');
+        if (s.Contains("//", StringComparison.Ordinal)
+            || s.StartsWith("http:", StringComparison.OrdinalIgnoreCase))
+        {
+            if (Uri.TryCreate(s, UriKind.Absolute, out var uri)
+                && !string.IsNullOrWhiteSpace(uri.Host))
+            {
+                if (uri.Port > 0)
+                    serverPort = uri.Port;
+                return uri.Host;
+            }
+        }
+
+        return s;
     }
 
     private string BuildVlessUriPlaceholder(string template, ServerCertificate cert,

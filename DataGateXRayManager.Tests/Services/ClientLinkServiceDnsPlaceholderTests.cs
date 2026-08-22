@@ -115,19 +115,43 @@ public class ClientLinkServiceDnsPlaceholderTests
         Assert.Contains("Endpoint: xs2.example.com:443", text);
     }
 
+    [Fact]
+    public async Task AddClientLink_StripsHttpsMistakenServerIp_InTlsProfile()
+    {
+        var text = await IssueAsync(
+            DashboardXrayExportTemplate,
+            dns1: "10.51.44.1",
+            dns2: null,
+            identity: true,
+            friendlyName: "Helsinki xray",
+            serverIp: "https://xs1-hel.datagateapp.com",
+            serverPort: 443,
+            transportMode: "tls");
+
+        using var doc = JsonDocument.Parse(text.Trim());
+        var vless = doc.RootElement.GetProperty("vless").GetString()!;
+        Assert.StartsWith("vless://", vless);
+        Assert.Contains("@xs1-hel.datagateapp.com:443", vless);
+        Assert.DoesNotContain("@https://", vless);
+        Assert.Equal("xs1-hel.datagateapp.com:443", doc.RootElement.GetProperty("endpoint").GetString());
+    }
+
     private static async Task<string> IssueAsync(
         string template,
         string? dns1,
         string? dns2,
         bool identity,
-        string friendlyName = "Test [xs2]")
+        string friendlyName = "Test [xs2]",
+        string serverIp = "xs2.example.com",
+        int serverPort = 443,
+        string transportMode = "plain")
     {
         var work = Directory.CreateTempSubdirectory("xray-dns-link-");
         try
         {
             var pairs = new Dictionary<string, string?>
             {
-                ["XRAY_TRANSPORT_MODE"] = "plain",
+                ["XRAY_TRANSPORT_MODE"] = transportMode,
                 ["XRAY_DNS_IDENTITY_ENABLED"] = identity ? "true" : "false",
             };
             if (dns1 is not null) pairs["DNS1"] = dns1;
@@ -151,8 +175,8 @@ public class ClientLinkServiceDnsPlaceholderTests
                 "cn-dns",
                 friendlyName,
                 template,
-                "xs2.example.com",
-                443,
+                serverIp,
+                serverPort,
                 CancellationToken.None);
 
             return await File.ReadAllTextAsync(meta.FilePath);

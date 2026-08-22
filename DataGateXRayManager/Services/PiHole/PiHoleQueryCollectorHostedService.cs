@@ -131,7 +131,7 @@ public sealed class PiHoleQueryCollectorHostedService(
         {
             cursorTarget = fetch.NewestFetchedAtUtc
                            ?? (records.Count > 0 ? records.Max(r => r.QueriedAtUtc) : untilUtc);
-            logger.LogWarning(
+            logger.LogInformation(
                 "Pi-hole poll hit BatchSize={BatchSize} (apiTotal={ApiTotal}); advancing cursor only to {Cursor:o} to avoid skipping queries.",
                 cfg.BatchSize,
                 fetch.TotalFromApi,
