@@ -9,7 +9,7 @@ namespace DataGateXRayManager.Tests.Services.XRayServices;
 public class XrayStoreRehydrateHostedServiceTests
 {
     [Fact]
-    public async Task StartAsync_IdentityEnabled_CallsSyncOnly()
+    public async Task ExecuteAsync_IdentityEnabled_CallsSyncOnly()
     {
         var sync = new Mock<IXrayDnsIdentitySyncService>();
         sync.SetupGet(x => x.IsEnabled).Returns(true);
@@ -29,17 +29,27 @@ public class XrayStoreRehydrateHostedServiceTests
             paths.Object,
             NullLogger<XrayStoreRehydrateHostedService>.Instance);
 
-        // Hosted service delays 2s — override by calling StartAsync with cancelled... can't skip delay.
-        // Use reflection-free approach: accept 2s delay in test.
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await sut.StartAsync(cts.Token);
+        await WaitUntilAsync(() =>
+        {
+            try
+            {
+                sync.Verify(x => x.SyncAsync(It.IsAny<CancellationToken>()), Times.Once);
+                return true;
+            }
+            catch (MockException)
+            {
+                return false;
+            }
+        }, cts.Token);
 
-        sync.Verify(x => x.SyncAsync(It.IsAny<CancellationToken>()), Times.Once);
         users.VerifyNoOtherCalls();
+        await sut.StopAsync(CancellationToken.None);
     }
 
     [Fact]
-    public async Task StartAsync_IdentityDisabled_CallsRehydrate()
+    public async Task ExecuteAsync_IdentityDisabled_CallsRehydrate()
     {
         var sync = new Mock<IXrayDnsIdentitySyncService>();
         sync.SetupGet(x => x.IsEnabled).Returns(false);
@@ -61,10 +71,33 @@ public class XrayStoreRehydrateHostedServiceTests
             paths.Object,
             NullLogger<XrayStoreRehydrateHostedService>.Instance);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await sut.StartAsync(cts.Token);
+        await WaitUntilAsync(() =>
+        {
+            try
+            {
+                users.Verify(
+                    x => x.RehydrateRunningXrayFromStoreAsync("/data", It.IsAny<CancellationToken>()),
+                    Times.Once);
+                return true;
+            }
+            catch (MockException)
+            {
+                return false;
+            }
+        }, cts.Token);
 
-        users.Verify(x => x.RehydrateRunningXrayFromStoreAsync("/data", It.IsAny<CancellationToken>()), Times.Once);
         sync.Verify(x => x.SyncAsync(It.IsAny<CancellationToken>()), Times.Never);
+        await sut.StopAsync(CancellationToken.None);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        while (!condition())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Delay(50, cancellationToken);
+        }
     }
 }

@@ -264,6 +264,7 @@ public class XRayUserService(
             ExpiryDate = c.CreatedUtc,
             CertificatePath = Path.Combine("xray", "clients", $"{c.CommonName}.json"),
             KeyPath = null,
-            Message = "VLESS client"
+            Message = "VLESS client",
+            IdentityIp = c.IdentityIp
         };
 }

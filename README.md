@@ -47,7 +47,10 @@ Same idea as OpenVPN VirtualAddress → CN:
    `{{dns_servers_json}}`, `{{dns1}}`, `{{dns2}}`, `{{dns_identity_enabled}}` (recommended profile template):
    `{"vless":"{{vless_uri}}","dnsServers":{{dns_servers_json}},"dnsIdentityEnabled":{{dns_identity_enabled}},"friendlyName":"{{friendly_name}}","uuid":"{{uuid}}","endpoint":"{{server_ip}}:{{server_port}}"}`
 5. Pi-hole must be able to **reply** to sources in `10.80.0.0/24` (same L2 as the Xray container aliases, or an explicit route). Otherwise DNS blackholes after `sendThrough`.
+   After Xray recreate the host route is lost — restore, e.g. `ip route replace 10.80.0.0/24 via <xray-container-ip> dev <docker-bridge>`.
+   Pi-hole FTL must **listen** on the bridge IP (`listen-address=172.20.0.1` in `dnsmasq.d`, with `misc.etc_dnsmasq_d=true`). UFW: allow `:53`/`:8080` on that bridge (iface names like `br-bf6a6b3f3bed` change if the network is recreated).
 6. Only classic DNS on **port 53** (tcp/udp) gets the per-user identity IP. DoH/DoT bypass this path.
+   Dashboard `/api/info` with JWT is **not** a public health check; probe from the node `127.0.0.1` or send Bearer. Nginx `:9443` may `allow` only dashboard IPs (403 from elsewhere).
 
 Manager allocates `IdentityIp` per client, adds iface aliases + Xray `sendThrough` rules for port 53, and enriches Pi-hole queries `ClientIp` → CommonName.
 

@@ -16,7 +16,16 @@ public class ClientLinkServiceDnsPlaceholderTests
 {
     /// <summary>Keep in sync with frontend/src/utils/exportConfigTemplates.ts XRAY_EXPORT_TEMPLATE.</summary>
     public const string DashboardXrayExportTemplate =
-        """{"vless":"{{vless_uri}}","dnsServers":{{dns_servers_json}},"dnsIdentityEnabled":{{dns_identity_enabled}},"friendlyName":"{{friendly_name}}","uuid":"{{uuid}}","endpoint":"{{server_ip}}:{{server_port}}"}""";
+        """
+        {
+          "vless": "{{vless_uri}}",
+          "dnsServers": {{dns_servers_json}},
+          "dnsIdentityEnabled": {{dns_identity_enabled}},
+          "friendlyName": "{{friendly_name}}",
+          "uuid": "{{uuid}}",
+          "endpoint": "{{server_ip}}:{{server_port}}"
+        }
+        """;
 
     [Fact]
     public async Task AddClientLink_ExpandsDnsPlaceholdersFromEnv()

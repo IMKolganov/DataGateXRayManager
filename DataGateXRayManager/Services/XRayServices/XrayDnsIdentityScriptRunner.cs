@@ -25,8 +25,10 @@ public interface IXrayDnsIdentityScriptRunner
     Task<XrayDnsIdentityScriptResult> RunAsync(XrayDnsIdentityScriptRequest request, CancellationToken cancellationToken);
 }
 
-public sealed class ProcessXrayDnsIdentityScriptRunner : IXrayDnsIdentityScriptRunner
+public sealed class ProcessXrayDnsIdentityScriptRunner(TimeSpan? scriptTimeout = null) : IXrayDnsIdentityScriptRunner
 {
+    private readonly TimeSpan _scriptTimeout = scriptTimeout ?? TimeSpan.FromSeconds(90);
+
     public async Task<XrayDnsIdentityScriptResult> RunAsync(
         XrayDnsIdentityScriptRequest request,
         CancellationToken cancellationToken)
@@ -68,7 +70,29 @@ public sealed class ProcessXrayDnsIdentityScriptRunner : IXrayDnsIdentityScriptR
 
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
-        await proc.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+
+        // Avoid blocking the host forever if the script stalls (e.g. xray -test / ip).
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(_scriptTimeout);
+        try
+        {
+            await proc.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (!proc.HasExited)
+                    proc.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // ignore kill races
+            }
+
+            throw new TimeoutException(
+                $"DNS identity sync script timed out after {_scriptTimeout.TotalSeconds:0}s: {request.ScriptPath}");
+        }
 
         return new XrayDnsIdentityScriptResult
         {

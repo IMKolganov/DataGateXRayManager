@@ -66,14 +66,26 @@ jq --argjson clients "$CLIENTS_JSON" --arg prefix "$TAG_PREFIX" '
     )
 ' "$CONFIG_PATH" >"$TMP"
 
-echo "[dns-identity] Validating config..."
-xray run -test -config "$TMP"
+echo "[dns-identity] Validating config JSON..."
+# Structural check only. Avoid `xray run -test` while a live core is running:
+# GNU timeout without -k can hang forever if xray ignores SIGTERM.
+if ! jq -e '
+  (.inbounds | type == "array")
+  and (.outbounds | type == "array")
+  and (.routing.rules | type == "array")
+  and ([.outbounds[]? | select(.sendThrough != null)] | length) >= 0
+' "$TMP" >/dev/null; then
+  echo "[dns-identity] ERROR: generated config failed jq validation" >&2
+  exit 1
+fi
+echo "[dns-identity] Config JSON OK"
 
 # Aliases only after config validates
 PREFIX="${SUBNET%%/*}"
 OCTETS="$(echo "$PREFIX" | awk -F. '{print $1"."$2"."$3"."}')"
+# ip -o -4 addr: "2: eth0    inet 10.80.0.2/32 scope ..." → address is field 4
 while read -r line; do
-  ip_addr="$(echo "$line" | awk '{print $2}' | cut -d/ -f1)"
+  ip_addr="$(echo "$line" | awk '{print $4}' | cut -d/ -f1)"
   [[ -z "$ip_addr" ]] && continue
   case "$ip_addr" in
     ${OCTETS}*)
@@ -91,12 +103,18 @@ done < <(ip -o -4 addr show dev "$IFACE" 2>/dev/null || true)
 
 for ip_addr in "${DESIRED_IPS[@]:-}"; do
   [[ -z "$ip_addr" ]] && continue
-  if ! ip -o -4 addr show dev "$IFACE" | awk '{print $2}' | grep -qx "${ip_addr}/32"; then
+  if ! ip -o -4 addr show dev "$IFACE" | awk '{print $4}' | grep -qx "${ip_addr}/32"; then
     echo "[dns-identity] Adding alias $ip_addr/32"
-    ip addr add "$ip_addr/32" dev "$IFACE" || {
-      echo "[dns-identity] ERROR: failed to add $ip_addr/32 (need NET_ADMIN / correct iface?)" >&2
-      exit 1
-    }
+    if ! out="$(ip addr add "$ip_addr/32" dev "$IFACE" 2>&1)"; then
+      if echo "$out" | grep -qiE 'File exists|Address already assigned'; then
+        echo "[dns-identity] Alias $ip_addr/32 already present"
+      else
+        echo "[dns-identity] ERROR: failed to add $ip_addr/32 (need NET_ADMIN / correct iface?): $out" >&2
+        exit 1
+      fi
+    fi
+  else
+    echo "[dns-identity] Alias $ip_addr/32 already present"
   fi
 done
 
@@ -116,8 +134,10 @@ if [[ -f "$XRAY_PID_FILE" ]]; then
   fi
 fi
 
-xray run -config "$CONFIG_PATH" &
+# nohup + disown: background xray must survive script exit (SIGHUP).
+nohup xray run -config "$CONFIG_PATH" >/dev/null 2>&1 &
 new_pid=$!
+disown "$new_pid" 2>/dev/null || true
 echo "$new_pid" >"$XRAY_PID_FILE"
 sleep 0.5
 if ! kill -0 "$new_pid" 2>/dev/null; then
