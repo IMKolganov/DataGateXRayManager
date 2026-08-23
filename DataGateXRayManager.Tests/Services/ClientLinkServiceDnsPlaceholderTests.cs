@@ -19,6 +19,7 @@ public class ClientLinkServiceDnsPlaceholderTests
         """
         {
           "vless": "{{vless_uri}}",
+          "vlessXhttp": "{{vless_uri_xhttp}}",
           "dnsServers": {{dns_servers_json}},
           "dnsIdentityEnabled": {{dns_identity_enabled}},
           "friendlyName": "{{friendly_name}}",
@@ -62,6 +63,29 @@ public class ClientLinkServiceDnsPlaceholderTests
         Assert.Equal("11111111-1111-1111-1111-111111111111", root.GetProperty("uuid").GetString());
         Assert.Equal("xs2.example.com:443", root.GetProperty("endpoint").GetString());
         Assert.Equal("xs2 [Pi-hole]", root.GetProperty("friendlyName").GetString());
+        // Nodes without the extra transport must still produce a valid profile.
+        Assert.Equal("", root.GetProperty("vlessXhttp").GetString());
+    }
+
+    [Fact]
+    public async Task AddClientLink_DashboardDefaultTemplate_CarriesXhttpProfileWhenNodeHasIt()
+    {
+        var text = await IssueAsync(
+            DashboardXrayExportTemplate,
+            dns1: "172.20.0.1",
+            dns2: null,
+            identity: true,
+            transportMode: "tls",
+            xhttpEnabled: true,
+            xhttpPort: "2053",
+            xhttpPath: "/api/v1/update",
+            xhttpMode: "auto");
+
+        using var doc = JsonDocument.Parse(text.Trim());
+        var root = doc.RootElement;
+        Assert.Contains("type=tcp", root.GetProperty("vless").GetString());
+        Assert.Contains("type=xhttp", root.GetProperty("vlessXhttp").GetString());
+        Assert.Contains("@xs2.example.com:2053?", root.GetProperty("vlessXhttp").GetString());
     }
 
     [Fact]
@@ -69,6 +93,8 @@ public class ClientLinkServiceDnsPlaceholderTests
     {
         // Keep in sync with frontend/src/utils/exportConfigTemplates.ts XRAY_EXPORT_TEMPLATE.
         Assert.Contains("{{vless_uri}}", DashboardXrayExportTemplate);
+        Assert.Contains("{{vless_uri_xhttp}}", DashboardXrayExportTemplate);
+        Assert.Contains("\"vlessXhttp\"", DashboardXrayExportTemplate);
         Assert.Contains("{{dns_servers_json}}", DashboardXrayExportTemplate);
         Assert.Contains("{{dns_identity_enabled}}", DashboardXrayExportTemplate);
         Assert.Contains("\"dnsServers\"", DashboardXrayExportTemplate);
