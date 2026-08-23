@@ -34,11 +34,17 @@ public class JwtValidationMiddleware(RequestDelegate next)
 {
     private static readonly string[] ExcludedPaths =
     {
-        "/", "/favicon.ico", "/swagger", "/swagger/index.html", "/swagger/v1/swagger.json", "/api/proxy"
+        "/",
+        "/favicon.ico",
+        "/swagger",
+        "/swagger/index.html",
+        "/swagger/v1/swagger.json",
+        "/api/proxy"
     };
 
     private static readonly string[] LocalOnlyPaths =
     {
+        "/api/info",
         "/api/vpn-events/connect",
         "/api/vpn-events/disconnect",
         "/api/vpn-events/tlsverify",

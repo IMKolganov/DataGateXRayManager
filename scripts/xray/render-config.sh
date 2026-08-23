@@ -3,8 +3,40 @@
 # Env: CONFIG_PATH, ACCESS_LOG, ERROR_LOG, PORT, DNS1, DNS2,
 #      XRAY_MGMT_HOST, XRAY_MGMT_PORT, INBOUND_TAG
 # Optional: XRAY_EXTERNAL_CONFIG_PATH (copy this file and skip generation)
+# Optional: XRAY_ACCEPT_PROXY_PROTOCOL=true — set sockopt.acceptProxyProtocol on VLESS/etc.
+#           Use with nginx stream `proxy_protocol on;` so Xray sees the real client IP.
 
 set -euo pipefail
+
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# After templates / external copy: enable PROXY protocol accept when env is set.
+apply_accept_proxy_protocol() {
+  if ! is_truthy "${XRAY_ACCEPT_PROXY_PROTOCOL:-}"; then
+    return 0
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "[xray-config] ERROR: XRAY_ACCEPT_PROXY_PROTOCOL is set but jq is missing." >&2
+    exit 1
+  fi
+
+  echo "[xray-config] XRAY_ACCEPT_PROXY_PROTOCOL=true → sockopt.acceptProxyProtocol on proxy inbounds"
+  local tmp="${CONFIG_PATH}.proxyprotocol.tmp"
+  jq '
+    (.inbounds[]?
+      | select(.protocol == "vless" or .protocol == "vmess" or .protocol == "trojan")
+      | .streamSettings) |=
+        ((. // {network: "tcp"})
+         | .sockopt = ((.sockopt // {}) + {acceptProxyProtocol: true}))
+  ' "$CONFIG_PATH" >"$tmp"
+  mv "$tmp" "$CONFIG_PATH"
+}
 
 write_plain() {
   cat <<EOF >"$CONFIG_PATH"
@@ -247,6 +279,7 @@ main() {
       && ! jq -e '.stats != null and .policy != null and (.policy.levels["0"].statsUserUplink == true) and (.policy.levels["0"].statsUserDownlink == true)' "$CONFIG_PATH" >/dev/null 2>&1; then
       echo "[xray-config] WARNING: external config is missing stats/policy user counters (see write_plain in this script: stats {}, policy.levels[\"0\"] statsUserUplink/Downlink/Online, api.services StatsService) — bytes in the UI may stay 0." >&2
     fi
+    apply_accept_proxy_protocol
     return 0
   fi
 
@@ -270,6 +303,8 @@ main() {
       exit 1
       ;;
   esac
+
+  apply_accept_proxy_protocol
 }
 
 main "$@"

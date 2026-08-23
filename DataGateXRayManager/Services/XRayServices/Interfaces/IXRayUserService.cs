@@ -21,5 +21,9 @@ public interface IXRayUserService
     /// Re-applies every non-revoked client from <c>clients.store.json</c> to the running Xray via <c>adu</c>.
     /// Needed after Xray process restart: <c>config.json</c> keeps <c>clients: []</c> while the store still lists UUIDs.
     /// </summary>
-    Task RehydrateRunningXrayFromStoreAsync(string dataDir, CancellationToken cancellationToken);
+    /// <returns>Number of clients successfully pushed via <c>adu</c>.</returns>
+    Task<int> RehydrateRunningXrayFromStoreAsync(string dataDir, CancellationToken cancellationToken);
+
+    /// <summary>Same as rehydrate but for an already-loaded client list (caller may hold the store lock).</summary>
+    Task<int> RehydrateClientsAsync(IReadOnlyList<StoredXRayClient> clients, CancellationToken cancellationToken);
 }

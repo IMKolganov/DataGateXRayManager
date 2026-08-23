@@ -9,6 +9,10 @@ DNS2="${DNS2:-8.8.4.4}"
 XRAY_MGMT_HOST="${XRayManagement__Host:-127.0.0.1}"
 XRAY_MGMT_PORT="${XRayManagement__Port:-10085}"
 INBOUND_TAG="${XRay__InboundTag:-vless-in}"
+XRAY_DNS_IDENTITY_ENABLED="${XRAY_DNS_IDENTITY_ENABLED:-false}"
+XRAY_DNS_IDENTITY_SUBNET="${XRAY_DNS_IDENTITY_SUBNET:-10.80.0.0/24}"
+XRAY_DNS_IDENTITY_IFACE="${XRAY_DNS_IDENTITY_IFACE:-eth0}"
+XRAY_PID_FILE="${XRAY_PID_FILE:-$DATA_DIR/xray/xray.pid}"
 
 if [ -n "$API_PORT" ]; then
   export ASPNETCORE_HTTP_PORTS="$API_PORT"
@@ -19,13 +23,18 @@ mkdir -p "$DATA_DIR/xray"
 ACCESS_LOG="$DATA_DIR/xray/access.log"
 ERROR_LOG="$DATA_DIR/xray/error.log"
 touch "$ACCESS_LOG" "$ERROR_LOG"
+# Pi-hole DNS collector cursor / runtime config (same layout idea as OpenVPN DATA_DIR)
+touch "$DATA_DIR/pihole-query-cursor.txt" 2>/dev/null || true
+
 
 CONFIG_PATH="${CONFIG_PATH:-$DATA_DIR/xray/config.json}"
 
 export CONFIG_PATH ACCESS_LOG ERROR_LOG PORT DNS1 DNS2
 export XRAY_MGMT_HOST XRAY_MGMT_PORT INBOUND_TAG
+export XRAY_DNS_IDENTITY_ENABLED XRAY_DNS_IDENTITY_SUBNET XRAY_DNS_IDENTITY_IFACE XRAY_PID_FILE
 export XRAY_TRANSPORT_MODE="${XRAY_TRANSPORT_MODE:-plain}"
 export XRAY_EXTERNAL_CONFIG_PATH="${XRAY_EXTERNAL_CONFIG_PATH:-}"
+export XRAY_ACCEPT_PROXY_PROTOCOL="${XRAY_ACCEPT_PROXY_PROTOCOL:-false}"
 export XRAY_TLS_CERT_FILE="${XRAY_TLS_CERT_FILE:-}"
 export XRAY_TLS_KEY_FILE="${XRAY_TLS_KEY_FILE:-}"
 export XRAY_REALITY_PRIVATE_KEY="${XRAY_REALITY_PRIVATE_KEY:-}"
@@ -33,7 +42,7 @@ export XRAY_REALITY_DEST="${XRAY_REALITY_DEST:-}"
 export XRAY_REALITY_SERVER_NAMES="${XRAY_REALITY_SERVER_NAMES:-}"
 export XRAY_REALITY_SHORT_IDS="${XRAY_REALITY_SHORT_IDS:-}"
 
-echo "[entrypoint] Rendering XRay config (mode=$XRAY_TRANSPORT_MODE)..."
+echo "[entrypoint] Rendering XRay config (mode=$XRAY_TRANSPORT_MODE, acceptProxyProtocol=$XRAY_ACCEPT_PROXY_PROTOCOL, dnsIdentity=$XRAY_DNS_IDENTITY_ENABLED)..."
 /scripts/xray/render-config.sh
 
 echo "[entrypoint] Validating XRay config..."
@@ -42,7 +51,8 @@ xray run -test -config "$CONFIG_PATH"
 echo "[entrypoint] Starting XRay..."
 xray run -config "$CONFIG_PATH" &
 XRAY_PID=$!
-trap 'kill $XRAY_PID 2>/dev/null || true' EXIT
+echo "$XRAY_PID" >"$XRAY_PID_FILE"
+trap 'kill $XRAY_PID 2>/dev/null || true; rm -f "$XRAY_PID_FILE"' EXIT
 
 # Avoid race: DataGateXRayManager calls `xray api` against XRayManagement__Host:Port (default 127.0.0.1:10085).
 echo "[entrypoint] Waiting for Xray API ${XRAY_MGMT_HOST}:${XRAY_MGMT_PORT}..."

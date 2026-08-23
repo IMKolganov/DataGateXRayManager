@@ -8,7 +8,7 @@ public interface IClientLinkService
         string serverIp, int serverPort, CancellationToken cancellationToken,
         string issuedTo = "xrayClient", int linkExpireDays = 365);
 
-    Task<ClientLinkMetadata?> RevokeClientLink(string dataDir, string commonName,
+    Task<ClientLinkMetadata> RevokeClientLink(string dataDir, string commonName,
         string fileName, string filePath, CancellationToken cancellationToken);
 
     Task<ClientLinkDownload> DownloadClientLink(string fileName, string filePath, CancellationToken cancellationToken);
