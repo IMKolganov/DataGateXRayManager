@@ -34,6 +34,15 @@ Image: `imkolganov/datagate-monitor-xray`.
 
 Key env (see compose / `.env.example`): `XRayManagement__Host`, `XRayManagement__Port`, `Backend__BaseUrl`, `XRAY_TRANSPORT_MODE` (`plain` / `tls` / `reality`), `XRAY_ACCEPT_PROXY_PROTOCOL` (`true` when nginx stream uses `proxy_protocol on;`).
 
+### Online sessions that never disconnect
+
+Since Xray-core 26.3 the online map is refcounted per inbound connection and has no expiry (`app/stats/online_map.go`), and the VLESS inbound never applies `policy.timeout.connIdle`. A client that disappears without FIN (mobile handover, suspended laptop) therefore leaves its socket in `ESTABLISHED` and stays online in `statsonlineiplist` indefinitely — and because `lastSeen` freezes, our session key stays stable and the dashboard row never closes.
+
+Two knobs guard against it:
+
+- `XRAY_TCP_KEEPALIVE_IDLE` / `XRAY_TCP_KEEPALIVE_INTERVAL` (default `60`/`15`, `0 0` disables) — rendered into `sockopt` of the proxy inbounds so the kernel drops sockets of vanished peers.
+- `XRAY_ONLINE_SESSION_STALE_AFTER_SECONDS` (default `600`, `0` disables) — the manager reports a user offline once neither `lastSeen` nor their traffic counters moved within the window. Traffic is part of the rule on purpose: a long-lived mux connection also freezes `lastSeen` while being perfectly alive.
+
 ### Pi-hole per-user DNS (identity IP)
 
 Same idea as OpenVPN VirtualAddress → CN:

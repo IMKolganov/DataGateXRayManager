@@ -35,18 +35,34 @@ export XRAY_DNS_IDENTITY_ENABLED XRAY_DNS_IDENTITY_SUBNET XRAY_DNS_IDENTITY_IFAC
 export XRAY_TRANSPORT_MODE="${XRAY_TRANSPORT_MODE:-plain}"
 export XRAY_EXTERNAL_CONFIG_PATH="${XRAY_EXTERNAL_CONFIG_PATH:-}"
 export XRAY_ACCEPT_PROXY_PROTOCOL="${XRAY_ACCEPT_PROXY_PROTOCOL:-false}"
+export XRAY_TCP_KEEPALIVE_IDLE="${XRAY_TCP_KEEPALIVE_IDLE:-60}"
+export XRAY_TCP_KEEPALIVE_INTERVAL="${XRAY_TCP_KEEPALIVE_INTERVAL:-15}"
 export XRAY_TLS_CERT_FILE="${XRAY_TLS_CERT_FILE:-}"
 export XRAY_TLS_KEY_FILE="${XRAY_TLS_KEY_FILE:-}"
 export XRAY_REALITY_PRIVATE_KEY="${XRAY_REALITY_PRIVATE_KEY:-}"
 export XRAY_REALITY_DEST="${XRAY_REALITY_DEST:-}"
 export XRAY_REALITY_SERVER_NAMES="${XRAY_REALITY_SERVER_NAMES:-}"
 export XRAY_REALITY_SHORT_IDS="${XRAY_REALITY_SHORT_IDS:-}"
+export XRAY_XHTTP_ENABLED="${XRAY_XHTTP_ENABLED:-false}"
+export XRAY_XHTTP_PORT="${XRAY_XHTTP_PORT:-2053}"
+export XRAY_XHTTP_PATH="${XRAY_XHTTP_PATH:-/api/v1/update}"
+export XRAY_XHTTP_MODE="${XRAY_XHTTP_MODE:-auto}"
+export XRAY_XHTTP_INBOUND_TAG="${XRAY_XHTTP_INBOUND_TAG:-vless-xhttp-in}"
 
-echo "[entrypoint] Rendering XRay config (mode=$XRAY_TRANSPORT_MODE, acceptProxyProtocol=$XRAY_ACCEPT_PROXY_PROTOCOL, dnsIdentity=$XRAY_DNS_IDENTITY_ENABLED)..."
+echo "[entrypoint] Rendering XRay config (mode=$XRAY_TRANSPORT_MODE, acceptProxyProtocol=$XRAY_ACCEPT_PROXY_PROTOCOL, dnsIdentity=$XRAY_DNS_IDENTITY_ENABLED, keepalive=${XRAY_TCP_KEEPALIVE_IDLE}s/${XRAY_TCP_KEEPALIVE_INTERVAL}s, xhttp=$XRAY_XHTTP_ENABLED)..."
 /scripts/xray/render-config.sh
 
 echo "[entrypoint] Validating XRay config..."
 xray run -test -config "$CONFIG_PATH"
+
+# Clients must be pushed (adu) to every inbound that exists, otherwise a user created while the
+# xHTTP inbound is up can connect on :$PORT but not on :$XRAY_XHTTP_PORT. Derived from the rendered
+# config rather than from XRAY_XHTTP_ENABLED, so a skipped/rolled-back inbound is never announced.
+if command -v jq >/dev/null 2>&1 \
+  && jq -e --arg t "$XRAY_XHTTP_INBOUND_TAG" 'any(.inbounds[]?; .tag == $t)' "$CONFIG_PATH" >/dev/null 2>&1; then
+  export XRay__ExtraInboundTags="$XRAY_XHTTP_INBOUND_TAG"
+  echo "[entrypoint] Extra inbound tags for client push: $XRay__ExtraInboundTags"
+fi
 
 echo "[entrypoint] Starting XRay..."
 xray run -config "$CONFIG_PATH" &

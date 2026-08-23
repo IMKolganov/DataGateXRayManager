@@ -32,7 +32,8 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
         Directory.CreateDirectory(linksDir);
 
         var vlessUri = BuildVlessUriPlaceholder(configTemplate, certResult, host, port, friendlyName);
-        var content = GenerateLinkFile(configTemplate, friendlyName, host, port, certResult, vlessUri);
+        var vlessXhttpUri = BuildVlessXhttpUriPlaceholder(configTemplate, certResult, host, friendlyName);
+        var content = GenerateLinkFile(configTemplate, friendlyName, host, port, certResult, vlessUri, vlessXhttpUri);
 
         var ext = Path.GetExtension(configTemplate);
         if (string.IsNullOrEmpty(ext) || ext.Length > 8)
@@ -139,10 +140,7 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
     {
         if (!template.Contains("{{vless_uri}}", StringComparison.Ordinal))
             return "";
-        var normalizedFriendlyName = (friendlyName ?? string.Empty).Trim();
-        var serverNameOnly = normalizedFriendlyName.Split('[')[0].Trim();
-        var labelBase = string.IsNullOrWhiteSpace(serverNameOnly) ? "DataGate" : $"DataGate {serverNameOnly}";
-        var label = labelBase.Replace(" ", "+", StringComparison.Ordinal);
+        var label = BuildFragmentLabel(friendlyName);
         var uuid = cert.SerialNumber;
         var transportMode = ResolveTransportMode();
         return transportMode switch
@@ -151,6 +149,81 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
             "reality" => BuildVlessRealityUriPlaceholder(uuid, serverIp, serverPort, label),
             _ => $"vless://{uuid}@{serverIp}:{serverPort}?encryption=none&type=tcp#{label}"
         };
+    }
+
+    private static string BuildFragmentLabel(string friendlyName)
+    {
+        var normalizedFriendlyName = (friendlyName ?? string.Empty).Trim();
+        var serverNameOnly = normalizedFriendlyName.Split('[')[0].Trim();
+        var labelBase = string.IsNullOrWhiteSpace(serverNameOnly) ? "DataGate" : $"DataGate {serverNameOnly}";
+        return labelBase.Replace(" ", "+", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// URI for the optional xHTTP inbound (see <c>apply_xhttp_inbound</c> in <c>render-config.sh</c>). It is a
+    /// second profile on its own port, so it is emitted alongside <c>{{vless_uri}}</c> rather than replacing it.
+    /// </summary>
+    private string BuildVlessXhttpUriPlaceholder(string template, ServerCertificate cert, string serverHost,
+        string friendlyName)
+    {
+        if (!template.Contains("{{vless_uri_xhttp}}", StringComparison.Ordinal))
+            return "";
+
+        if (!IsXhttpEnabled())
+        {
+            logger.LogInformation(
+                "Template requests {{vless_uri_xhttp}} but XRAY_XHTTP_ENABLED is not set — emitting an empty value.");
+            return "";
+        }
+
+        var port = XhttpPort;
+        if (port is <= 0 or > 65535)
+        {
+            logger.LogWarning("XRAY_XHTTP_PORT is not a valid port ({Port}); skipping the xHTTP share URI.", port);
+            return "";
+        }
+
+        var sni = ResolveTlsSniHost(serverHost) ?? serverHost.Trim();
+        var query =
+            $"encryption=none&security=tls&sni={Uri.EscapeDataString(sni)}&alpn=h2&type=xhttp" +
+            $"&path={Uri.EscapeDataString(XhttpPath)}&mode={Uri.EscapeDataString(XhttpMode)}";
+        return $"vless://{cert.SerialNumber}@{serverHost}:{port}?{query}#{BuildFragmentLabel(friendlyName)}+xHTTP";
+    }
+
+    private bool IsXhttpEnabled() =>
+        (configuration["XRAY_XHTTP_ENABLED"] ?? Environment.GetEnvironmentVariable("XRAY_XHTTP_ENABLED") ?? "")
+        .Trim()
+        .ToLowerInvariant() switch
+        {
+            "1" or "true" or "yes" or "on" => true,
+            _ => false
+        };
+
+    private int XhttpPort =>
+        int.TryParse(
+            configuration["XRAY_XHTTP_PORT"] ?? Environment.GetEnvironmentVariable("XRAY_XHTTP_PORT"),
+            out var port)
+            ? port
+            : 2053;
+
+    private string XhttpPath
+    {
+        get
+        {
+            var raw = (configuration["XRAY_XHTTP_PATH"] ?? Environment.GetEnvironmentVariable("XRAY_XHTTP_PATH") ?? "")
+                .Trim();
+            return raw.StartsWith('/') ? raw : "/api/v1/update";
+        }
+    }
+
+    private string XhttpMode
+    {
+        get
+        {
+            var raw = (configuration["XRAY_XHTTP_MODE"] ?? Environment.GetEnvironmentVariable("XRAY_XHTTP_MODE") ?? "")
+                .Trim();
+            return raw.Length == 0 ? "auto" : raw;
+        }
     }
 
     /// <summary>Matches <c>XRAY_TRANSPORT_MODE</c> in <c>entrypoint.sh</c> / Docker (plain | tls | reality).</summary>
@@ -225,7 +298,8 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
         string serverIp,
         int serverPort,
         ServerCertificate cert,
-        string vlessUri)
+        string vlessUri,
+        string vlessXhttpUri)
     {
         var dns1 = configuration["DNS1"] ?? "";
         var dns2 = configuration["DNS2"] ?? "";
@@ -237,6 +311,9 @@ public class ClientLinkService(ILogger<ClientLinkService> logger, IXRayUserServi
             .Replace("{{server_ip}}", serverIp, StringComparison.Ordinal)
             .Replace("{{server_port}}", serverPort.ToString(), StringComparison.Ordinal)
             .Replace("{{uuid}}", cert.SerialNumber, StringComparison.Ordinal)
+            .Replace("{{vless_uri_xhttp}}", vlessXhttpUri, StringComparison.Ordinal)
+            .Replace("{{xhttp_port}}", IsXhttpEnabled() ? XhttpPort.ToString() : "", StringComparison.Ordinal)
+            .Replace("{{xhttp_path}}", IsXhttpEnabled() ? XhttpPath : "", StringComparison.Ordinal)
             .Replace("{{vless_uri}}", vlessUri, StringComparison.Ordinal)
             .Replace("{{dns1}}", dns1.Trim(), StringComparison.Ordinal)
             .Replace("{{dns2}}", dns2.Trim(), StringComparison.Ordinal)
