@@ -48,6 +48,9 @@ export XRAY_XHTTP_PORT="${XRAY_XHTTP_PORT:-2053}"
 export XRAY_XHTTP_PATH="${XRAY_XHTTP_PATH:-/api/v1/update}"
 export XRAY_XHTTP_MODE="${XRAY_XHTTP_MODE:-auto}"
 export XRAY_XHTTP_INBOUND_TAG="${XRAY_XHTTP_INBOUND_TAG:-vless-xhttp-in}"
+# Which inbound the issued client profile ({{vless_uri}}) points at: primary | xhttp. Downgraded to primary
+# below if the xHTTP inbound is missing from the rendered config.
+export XRAY_CLIENT_LINK_TRANSPORT="${XRAY_CLIENT_LINK_TRANSPORT:-primary}"
 
 echo "[entrypoint] Rendering XRay config (mode=$XRAY_TRANSPORT_MODE, acceptProxyProtocol=$XRAY_ACCEPT_PROXY_PROTOCOL, dnsIdentity=$XRAY_DNS_IDENTITY_ENABLED, keepalive=${XRAY_TCP_KEEPALIVE_IDLE}s/${XRAY_TCP_KEEPALIVE_INTERVAL}s, xhttp=$XRAY_XHTTP_ENABLED)..."
 /scripts/xray/render-config.sh
@@ -58,11 +61,20 @@ xray run -test -config "$CONFIG_PATH"
 # Clients must be pushed (adu) to every inbound that exists, otherwise a user created while the
 # xHTTP inbound is up can connect on :$PORT but not on :$XRAY_XHTTP_PORT. Derived from the rendered
 # config rather than from XRAY_XHTTP_ENABLED, so a skipped/rolled-back inbound is never announced.
+XHTTP_INBOUND_PRESENT=false
 if command -v jq >/dev/null 2>&1 \
   && jq -e --arg t "$XRAY_XHTTP_INBOUND_TAG" 'any(.inbounds[]?; .tag == $t)' "$CONFIG_PATH" >/dev/null 2>&1; then
+  XHTTP_INBOUND_PRESENT=true
   export XRay__ExtraInboundTags="$XRAY_XHTTP_INBOUND_TAG"
   echo "[entrypoint] Extra inbound tags for client push: $XRay__ExtraInboundTags"
 fi
+
+# Never hand out a profile for an inbound that is not running: it would break every client of this node.
+if [ "$XRAY_CLIENT_LINK_TRANSPORT" = "xhttp" ] && [ "$XHTTP_INBOUND_PRESENT" != "true" ]; then
+  echo "[entrypoint] WARNING: XRAY_CLIENT_LINK_TRANSPORT=xhttp but inbound '$XRAY_XHTTP_INBOUND_TAG' is not in the rendered config; issuing primary-transport links instead."
+  export XRAY_CLIENT_LINK_TRANSPORT="primary"
+fi
+echo "[entrypoint] Client link transport: $XRAY_CLIENT_LINK_TRANSPORT"
 
 echo "[entrypoint] Starting XRay..."
 xray run -config "$CONFIG_PATH" &

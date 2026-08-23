@@ -40,6 +40,13 @@ services:
       # XRAY_TCP_KEEPALIVE_INTERVAL: "15"
       # Backstop: report a user offline after this many seconds without new connections and without traffic
       # XRAY_ONLINE_SESSION_STALE_AFTER_SECONDS: "600"
+      # Second, HTTP-looking inbound on its own port (needs XRAY_TLS_CERT_FILE/KEY, published directly)
+      # XRAY_XHTTP_ENABLED: "true"
+      # XRAY_XHTTP_PORT: "2053"
+      # XRAY_XHTTP_PATH: "/api/v1/update"
+      # XRAY_XHTTP_MODE: "auto"
+      # Which inbound issued profiles point at: primary | xhttp (links re-render on download, so this is live)
+      # XRAY_CLIENT_LINK_TRANSPORT: "xhttp"
       # Optional: use a host file instead of generated config
       # XRAY_EXTERNAL_CONFIG_PATH: /data/xray/config.static.json
       # TLS mode: mount certs and set paths

@@ -34,6 +34,30 @@ Image: `imkolganov/datagate-monitor-xray`.
 
 Key env (see compose / `.env.example`): `XRayManagement__Host`, `XRayManagement__Port`, `Backend__BaseUrl`, `XRAY_TRANSPORT_MODE` (`plain` / `tls` / `reality`), `XRAY_ACCEPT_PROXY_PROTOCOL` (`true` when nginx stream uses `proxy_protocol on;`).
 
+### Second transport (xHTTP) and switching clients over to it
+
+VLESS over plain TCP+TLS on `:443` is the most fingerprintable shape we ship; where it gets throttled, an
+HTTP-looking transport survives. Enable a second inbound next to the primary one:
+
+- `XRAY_XHTTP_ENABLED` (default `false`), `XRAY_XHTTP_PORT` (`2053`), `XRAY_XHTTP_PATH` (`/api/v1/update`),
+  `XRAY_XHTTP_MODE` (`auto`), `XRAY_XHTTP_INBOUND_TAG` (`vless-xhttp-in`).
+- The inbound terminates its own TLS (`XRAY_TLS_CERT_FILE` / `XRAY_TLS_KEY_FILE` are required) and is published
+  directly, not through nginx. If it cannot be rendered, the config is rolled back and only the primary inbound runs.
+- Clients are pushed to every inbound present in the rendered config, so one credential works on both.
+
+`XRAY_CLIENT_LINK_TRANSPORT` (`primary` | `xhttp`) chooses which inbound the issued profile (`{{vless_uri}}`)
+points at. Because link files are re-rendered on download (see below), flipping it and restarting moves every
+user of that node to the other transport on their next connect. If the xHTTP inbound is missing from the
+rendered config, the entrypoint downgrades the setting to `primary` rather than issuing a dead profile.
+
+### Link files are re-rendered on download
+
+Apps request the profile on every connect, and `DownloadClientLink` re-renders it from the template captured at
+issue time (`{dataDir}/xray/link-render/{cn}.json`, no credentials — the UUID comes from the client store) plus
+the node's current settings. So transport, DNS and xHTTP changes reach existing users without re-issuing
+credentials or touching the dashboard template. If the template is missing, the client is revoked, or rendering
+fails, the stored file is served unchanged.
+
 ### Online sessions that never disconnect
 
 Since Xray-core 26.3 the online map is refcounted per inbound connection and has no expiry (`app/stats/online_map.go`), and the VLESS inbound never applies `policy.timeout.connIdle`. A client that disappears without FIN (mobile handover, suspended laptop) therefore leaves its socket in `ESTABLISHED` and stays online in `statsonlineiplist` indefinitely — and because `lastSeen` freezes, our session key stays stable and the dashboard row never closes.
