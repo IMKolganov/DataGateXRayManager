@@ -5,3 +5,5 @@
 **/data/
 .git/
 .env
+.env.*
+!.env.example

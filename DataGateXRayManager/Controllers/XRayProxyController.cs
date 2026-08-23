@@ -60,7 +60,7 @@ public class XRayProxyController(
         };
 
     [HttpGet]
-    public async Task Get([FromQuery] string? mode = null)
+    public async Task Get([FromQuery] string? mode = null, [FromQuery] string? clientRef = null)
     {
         if (!HttpContext.WebSockets.IsWebSocketRequest)
         {
@@ -87,13 +87,15 @@ public class XRayProxyController(
 
         var modeNorm = (mode ?? "tcp").Trim().ToLowerInvariant();
         var connectionId = Guid.NewGuid().ToString("N");
+        // Prefer explicit clientRef (VLESS email / common name) so session poll can map proxy → ProxyRealIp.
+        var commonName = ResolveCommonName(clientRef);
 
         try
         {
             if (modeNorm == "udp")
-                await HandleUdp(ws, targetIp, vpnPort, linkedCts.Token, logger, connectionId);
+                await HandleUdp(ws, targetIp, vpnPort, linkedCts.Token, logger, connectionId, commonName);
             else
-                await HandleTcp(ws, targetHost, vpnPort, linkedCts.Token, logger, connectionId);
+                await HandleTcp(ws, targetHost, vpnPort, linkedCts.Token, logger, connectionId, commonName);
         }
         catch (OperationCanceledException)
         {
@@ -121,7 +123,8 @@ public class XRayProxyController(
         int vpnPort,
         CancellationToken ct,
         ILogger logger,
-        string connectionId)
+        string connectionId,
+        string? commonName)
     {
         using var tcp = new TcpClient();
         tcp.NoDelay = true;
@@ -140,7 +143,7 @@ public class XRayProxyController(
 
         var localEp = (IPEndPoint)tcp.Client.LocalEndPoint!;
         var remoteEp = (IPEndPoint)tcp.Client.RemoteEndPoint!;
-        RegisterActiveConnection(connectionId, ProxyConnectionProtocol.Tcp, localEp, remoteEp);
+        RegisterActiveConnection(connectionId, ProxyConnectionProtocol.Tcp, localEp, remoteEp, commonName);
 
         try
         {
@@ -163,7 +166,8 @@ public class XRayProxyController(
         int vpnPort,
         CancellationToken ct,
         ILogger logger,
-        string connectionId)
+        string connectionId,
+        string? commonName)
     {
         var remote = new IPEndPoint(targetIp, vpnPort);
 
@@ -183,7 +187,7 @@ public class XRayProxyController(
         }
 
         var localEp = (IPEndPoint)udp.Client.LocalEndPoint!;
-        RegisterActiveConnection(connectionId, ProxyConnectionProtocol.Udp, localEp, remote);
+        RegisterActiveConnection(connectionId, ProxyConnectionProtocol.Udp, localEp, remote, commonName);
 
         // Optional: read and ignore app-level "connect" JSON message (text)
         // Your C++ bridge sends it right after handshake.
@@ -295,7 +299,8 @@ public class XRayProxyController(
         string connectionId,
         ProxyConnectionProtocol protocol,
         IPEndPoint localEp,
-        IPEndPoint remoteTargetEp)
+        IPEndPoint remoteTargetEp,
+        string? commonName)
     {
         var (clientIp, clientPort) = GetHttpClientAddress();
         var connection = new ActiveProxyConnection
@@ -311,7 +316,7 @@ public class XRayProxyController(
             ConnectedAtUtc = DateTime.UtcNow
         };
 
-        activeProxyConnections.Add(connection);
+        activeProxyConnections.Add(connection, commonName);
 
         proxyConnectionHistory.Add(new ProxyConnectionHistoryItem
         {
@@ -377,22 +382,76 @@ public class XRayProxyController(
         });
     }
 
-    private (string? Ip, int Port) GetHttpClientAddress()
+    private (string? Ip, int Port) GetHttpClientAddress() =>
+        ResolveHttpClientAddress(HttpContext);
+
+    /// <summary>
+    /// Client IP for proxy history/enrichment, plus TCP remote port when it belongs to that IP.
+    /// When the IP comes from trusted XFF (differs from the TCP peer), port is forced to 0 —
+    /// mashing XFF IP with the LB hop port would produce a fake endpoint.
+    /// </summary>
+    public static (string? Ip, int Port) ResolveHttpClientAddress(HttpContext ctx)
     {
-        var ip = ResolveClientIp(HttpContext);
-        return (ip, HttpContext.Connection.RemotePort);
+        var ip = ResolveClientIpFromContext(ctx);
+        if (ctx.Request.Headers.ContainsKey("X-Forwarded-For")
+            && !string.IsNullOrEmpty(ip)
+            && ip != ctx.Connection.RemoteIpAddress?.ToString())
+            return (ip, 0);
+
+        return (ip, ctx.Connection.RemotePort);
     }
 
-    private static string? ResolveClientIp(HttpContext ctx)
+    /// <summary>
+    /// Resolves VLESS email / common name for proxy→session matching.
+    /// Query <c>clientRef</c>, then <c>X-Client-Ref</c>, then <c>X-Common-Name</c>.
+    /// </summary>
+    public static string? ResolveCommonName(string? clientRefFromQuery, HttpContext? httpContext = null)
     {
-        if (ctx.Request.Headers.TryGetValue("X-Forwarded-For", out var forwarded))
+        var fromQuery = NormalizeToken(clientRefFromQuery);
+        if (fromQuery is not null)
+            return fromQuery;
+
+        if (httpContext is null)
+            return null;
+
+        var fromClientRefHeader = NormalizeToken(httpContext.Request.Headers["X-Client-Ref"].FirstOrDefault());
+        if (fromClientRefHeader is not null)
+            return fromClientRefHeader;
+
+        return NormalizeToken(httpContext.Request.Headers["X-Common-Name"].FirstOrDefault());
+    }
+
+    private string? ResolveCommonName(string? clientRefFromQuery) =>
+        ResolveCommonName(clientRefFromQuery, HttpContext);
+
+    private static string? NormalizeToken(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        var trimmed = value.Trim();
+        return trimmed.Length == 0 ? null : trimmed;
+    }
+
+    /// <summary>
+    /// Real WebSocket client IP: first public <c>X-Forwarded-For</c> hop only when the TCP peer is
+    /// private/loopback (local reverse proxy / docker edge). Otherwise connection remote.
+    /// </summary>
+    public static string? ResolveClientIpFromContext(HttpContext ctx)
+    {
+        var connectionIp = ctx.Connection.RemoteIpAddress;
+
+        if (connectionIp is not null
+            && XRayProxyRealIpEnricher.IsPrivateOrLoopback(connectionIp)
+            && ctx.Request.Headers.TryGetValue("X-Forwarded-For", out var forwarded))
         {
             var first = forwarded.ToString().Split(',').Select(s => s.Trim()).FirstOrDefault();
-            if (!string.IsNullOrEmpty(first) && IPAddress.TryParse(first, out _))
+            if (!string.IsNullOrEmpty(first)
+                && IPAddress.TryParse(first, out var xffIp)
+                && !XRayProxyRealIpEnricher.IsPrivateOrLoopback(xffIp))
                 return first;
         }
 
-        return ctx.Connection.RemoteIpAddress?.ToString();
+        return connectionIp?.ToString();
     }
 
     private static async Task SafeCloseWs(WebSocket ws, WebSocketCloseStatus status, string reason)
