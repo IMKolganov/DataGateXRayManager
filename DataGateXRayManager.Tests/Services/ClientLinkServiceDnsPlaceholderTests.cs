@@ -136,6 +136,64 @@ public class ClientLinkServiceDnsPlaceholderTests
         Assert.Equal("xs1-hel.datagateapp.com:443", doc.RootElement.GetProperty("endpoint").GetString());
     }
 
+    [Fact]
+    public async Task AddClientLink_XhttpEnabled_ExpandsVlessUriXhttpAndMetaPlaceholders()
+    {
+        var text = await IssueAsync(
+            """{"vless":"{{vless_uri}}","vlessXhttp":"{{vless_uri_xhttp}}","xhttpPort":"{{xhttp_port}}","xhttpPath":"{{xhttp_path}}"}""",
+            dns1: null,
+            dns2: null,
+            identity: false,
+            transportMode: "tls",
+            xhttpEnabled: true,
+            xhttpPort: "2053",
+            xhttpPath: "/api/v1/update",
+            xhttpMode: "auto");
+
+        using var doc = JsonDocument.Parse(text.Trim());
+        var xhttp = doc.RootElement.GetProperty("vlessXhttp").GetString()!;
+        Assert.StartsWith("vless://11111111-1111-1111-1111-111111111111@xs2.example.com:2053?", xhttp);
+        Assert.Contains("type=xhttp", xhttp);
+        Assert.Contains("security=tls", xhttp);
+        Assert.Contains("alpn=h2", xhttp);
+        Assert.Contains("path=%2Fapi%2Fv1%2Fupdate", xhttp);
+        Assert.Contains("mode=auto", xhttp);
+        Assert.Contains("sni=xs2.example.com", xhttp);
+        Assert.EndsWith("#DataGate+Test+xHTTP", xhttp);
+        Assert.Equal("2053", doc.RootElement.GetProperty("xhttpPort").GetString());
+        Assert.Equal("/api/v1/update", doc.RootElement.GetProperty("xhttpPath").GetString());
+        Assert.Contains("@xs2.example.com:443", doc.RootElement.GetProperty("vless").GetString());
+    }
+
+    [Fact]
+    public async Task AddClientLink_XhttpDisabled_EmitsEmptyXhttpPlaceholders()
+    {
+        var text = await IssueAsync(
+            """{"vlessXhttp":"{{vless_uri_xhttp}}","xhttpPort":"{{xhttp_port}}","xhttpPath":"{{xhttp_path}}"}""",
+            dns1: null,
+            dns2: null,
+            identity: false,
+            xhttpEnabled: false);
+
+        using var doc = JsonDocument.Parse(text.Trim());
+        Assert.Equal("", doc.RootElement.GetProperty("vlessXhttp").GetString());
+        Assert.Equal("", doc.RootElement.GetProperty("xhttpPort").GetString());
+        Assert.Equal("", doc.RootElement.GetProperty("xhttpPath").GetString());
+    }
+
+    [Fact]
+    public async Task AddClientLink_XhttpPlaceholderWithoutEnabledFlag_EmitsEmptyUri()
+    {
+        var text = await IssueAsync(
+            """{"vlessXhttp":"{{vless_uri_xhttp}}"}""",
+            dns1: null,
+            dns2: null,
+            identity: false);
+
+        using var doc = JsonDocument.Parse(text.Trim());
+        Assert.Equal("", doc.RootElement.GetProperty("vlessXhttp").GetString());
+    }
+
     private static async Task<string> IssueAsync(
         string template,
         string? dns1,
@@ -144,7 +202,11 @@ public class ClientLinkServiceDnsPlaceholderTests
         string friendlyName = "Test [xs2]",
         string serverIp = "xs2.example.com",
         int serverPort = 443,
-        string transportMode = "plain")
+        string transportMode = "plain",
+        bool? xhttpEnabled = null,
+        string? xhttpPort = null,
+        string? xhttpPath = null,
+        string? xhttpMode = null)
     {
         var work = Directory.CreateTempSubdirectory("xray-dns-link-");
         try
@@ -156,6 +218,11 @@ public class ClientLinkServiceDnsPlaceholderTests
             };
             if (dns1 is not null) pairs["DNS1"] = dns1;
             if (dns2 is not null) pairs["DNS2"] = dns2;
+            if (xhttpEnabled is not null)
+                pairs["XRAY_XHTTP_ENABLED"] = xhttpEnabled.Value ? "true" : "false";
+            if (xhttpPort is not null) pairs["XRAY_XHTTP_PORT"] = xhttpPort;
+            if (xhttpPath is not null) pairs["XRAY_XHTTP_PATH"] = xhttpPath;
+            if (xhttpMode is not null) pairs["XRAY_XHTTP_MODE"] = xhttpMode;
 
             var config = new ConfigurationBuilder().AddInMemoryCollection(pairs).Build();
             var users = new Mock<IXRayUserService>();
