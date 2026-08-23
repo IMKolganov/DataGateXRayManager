@@ -6,6 +6,7 @@ using DataGateXRayManager.Services.Interfaces;
 using DataGateXRayManager.Services.Proxy;
 using DataGateXRayManager.Services.XRayServices;
 using DataGateXRayManager.Services.XRayTelnet;
+
 namespace DataGateXRayManager.Configurations;
 
 public static class ServiceConfiguration
@@ -56,6 +57,17 @@ public static class ServiceConfiguration
         });
 
         services.AddHostedService<MicroserviceJwtValidatorInitializer>();
+
+        services.AddHttpClient(VpnServerAnnounceHostedService.HttpClientName, client =>
+        {
+            var baseUrl = config["Backend:BaseUrl"];
+            client.BaseAddress = new Uri(
+                VpnServerAnnounceApiUrlResolver.EnsureTrailingSlash(
+                    baseUrl ?? throw new InvalidOperationException("Backend:BaseUrl is required")));
+            client.Timeout = TimeSpan.FromSeconds(30);
+        });
+        services.AddHostedService<VpnServerAnnounceHostedService>();
+
         services.AddHostedService<XrayStoreRehydrateHostedService>();
 
         services.Configure<XRayManagementOptions>(config.GetSection("XRayManagement"));
