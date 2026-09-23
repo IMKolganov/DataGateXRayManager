@@ -6,10 +6,11 @@ namespace DataGateXRayManager.Tests.Helpers;
 public class VpnServerAnnounceApiUrlResolverTests
 {
     [Fact]
-    public void Resolve_PublicApiUrl_WinsOverPublicIpAndPort()
+    public void Resolve_PublicApiUrl_WinsOverDomainAndIp()
     {
         var result = VpnServerAnnounceApiUrlResolver.Resolve(
             "https://vpn.example.com:9443",
+            "xray.example.com",
             "203.0.113.10",
             5010);
 
@@ -21,6 +22,7 @@ public class VpnServerAnnounceApiUrlResolverTests
     {
         var result = VpnServerAnnounceApiUrlResolver.Resolve(
             "https://vpn.example.com/",
+            null,
             "203.0.113.10",
             5010);
 
@@ -28,26 +30,42 @@ public class VpnServerAnnounceApiUrlResolverTests
     }
 
     [Fact]
-    public void Resolve_WithoutPublicApiUrl_BuildsFromIpAndPort()
+    public void Resolve_WithoutPublicApiUrl_PrefersDomainOverIp()
     {
-        var result = VpnServerAnnounceApiUrlResolver.Resolve(null, "203.0.113.10", 5011);
+        var result = VpnServerAnnounceApiUrlResolver.Resolve(
+            null,
+            "xray.example.com",
+            "203.0.113.10",
+            9443);
+
+        Assert.Equal("https://xray.example.com:9443/", result);
+    }
+
+    [Fact]
+    public void Resolve_WithoutPublicApiUrlOrDomain_BuildsFromIpAndPort()
+    {
+        var result = VpnServerAnnounceApiUrlResolver.Resolve(null, null, "203.0.113.10", 5011);
 
         Assert.Equal("http://203.0.113.10:5011/", result);
     }
 
     [Fact]
-    public void Resolve_WhitespacePublicApiUrl_FallsBackToIp()
+    public void Resolve_WhitespacePublicApiUrl_FallsBackToDomain()
     {
-        var result = VpnServerAnnounceApiUrlResolver.Resolve("   ", "198.51.100.2", 5010);
+        var result = VpnServerAnnounceApiUrlResolver.Resolve(
+            "   ",
+            "node.example.com",
+            "198.51.100.2",
+            5010);
 
-        Assert.Equal("http://198.51.100.2:5010/", result);
+        Assert.Equal("https://node.example.com:5010/", result);
     }
 
     [Fact]
-    public void Resolve_MissingIp_ReturnsNull()
+    public void Resolve_MissingDomainAndIp_ReturnsNull()
     {
-        Assert.Null(VpnServerAnnounceApiUrlResolver.Resolve(null, null, 5010));
-        Assert.Null(VpnServerAnnounceApiUrlResolver.Resolve(null, "  ", 5010));
+        Assert.Null(VpnServerAnnounceApiUrlResolver.Resolve(null, null, null, 5010));
+        Assert.Null(VpnServerAnnounceApiUrlResolver.Resolve(null, "  ", "  ", 5010));
     }
 
     [Fact]
@@ -111,6 +129,46 @@ public class VpnServerAnnounceApiUrlResolverTests
         finally
         {
             Environment.SetEnvironmentVariable(VpnServerAnnounceApiUrlResolver.PublicApiUrlKey, previous);
+        }
+    }
+
+    [Fact]
+    public void GetConfiguredDomain_PrefersXrayDoubleUnderscoreEnv()
+    {
+        var prevDd = Environment.GetEnvironmentVariable("XRAY__DOMAIN");
+        var prevSingle = Environment.GetEnvironmentVariable("XRAY_DOMAIN");
+        try
+        {
+            Environment.SetEnvironmentVariable("XRAY__DOMAIN", "from-dd.example.com");
+            Environment.SetEnvironmentVariable("XRAY_DOMAIN", "from-single.example.com");
+            var config = new ConfigurationBuilder().Build();
+
+            Assert.Equal("from-dd.example.com", VpnServerAnnounceApiUrlResolver.GetConfiguredDomain(config));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("XRAY__DOMAIN", prevDd);
+            Environment.SetEnvironmentVariable("XRAY_DOMAIN", prevSingle);
+        }
+    }
+
+    [Fact]
+    public void GetConfiguredDomain_FallsBackToXrayDomainEnv()
+    {
+        var prevDd = Environment.GetEnvironmentVariable("XRAY__DOMAIN");
+        var prevSingle = Environment.GetEnvironmentVariable("XRAY_DOMAIN");
+        try
+        {
+            Environment.SetEnvironmentVariable("XRAY__DOMAIN", null);
+            Environment.SetEnvironmentVariable("XRAY_DOMAIN", "from-single.example.com");
+            var config = new ConfigurationBuilder().Build();
+
+            Assert.Equal("from-single.example.com", VpnServerAnnounceApiUrlResolver.GetConfiguredDomain(config));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("XRAY__DOMAIN", prevDd);
+            Environment.SetEnvironmentVariable("XRAY_DOMAIN", prevSingle);
         }
     }
 }

@@ -70,13 +70,14 @@ public sealed class VpnServerAnnounceHostedService(
         var apiPort = VpnServerAnnounceApiUrlResolver.ResolveApiPort(configuration);
         var apiUrl = VpnServerAnnounceApiUrlResolver.Resolve(
             VpnServerAnnounceApiUrlResolver.GetConfiguredPublicApiUrl(configuration),
+            VpnServerAnnounceApiUrlResolver.GetConfiguredDomain(configuration),
             publicIp,
             apiPort);
 
         if (string.IsNullOrWhiteSpace(apiUrl))
         {
             logger.LogWarning(
-                "Skipping VPN server announce: ApiUrl could not be resolved (set {PublicApiUrlKey} or ensure public IP is available).",
+                "Skipping VPN server announce: ApiUrl could not be resolved (set {PublicApiUrlKey}, XRAY_DOMAIN, or ensure public IP is available).",
                 VpnServerAnnounceApiUrlResolver.PublicApiUrlKey);
             return;
         }

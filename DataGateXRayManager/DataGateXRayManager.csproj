@@ -5,9 +5,9 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <RootNamespace>DataGateXRayManager</RootNamespace>
-        <Version>1.1.2.24</Version>
-        <AssemblyVersion>1.1.2.24</AssemblyVersion>
-        <FileVersion>1.1.2.24</FileVersion>
+        <Version>1.1.2.25</Version>
+        <AssemblyVersion>1.1.2.25</AssemblyVersion>
+        <FileVersion>1.1.2.25</FileVersion>
     </PropertyGroup>
 
     <ItemGroup>
