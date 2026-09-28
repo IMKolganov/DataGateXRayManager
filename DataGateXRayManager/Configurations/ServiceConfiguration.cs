@@ -20,6 +20,8 @@ public static class ServiceConfiguration
         services.AddSingleton<IXrayDnsIdentityScriptRunner, ProcessXrayDnsIdentityScriptRunner>();
         services.AddSingleton<IXrayDnsIdentitySyncService, XrayDnsIdentitySyncService>();
         services.AddScoped<IXRayUserService, XRayUserService>();
+        // Singleton: compares traffic counters with the previous poll to spot online-map leftovers.
+        services.AddSingleton<IXrayStaleOnlineSessionFilter, XrayStaleOnlineSessionFilter>();
         services.AddScoped<IXRayActiveSessionsService, XRayActiveSessionsService>();
 
         services.AddRateLimiter(options =>

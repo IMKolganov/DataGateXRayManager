@@ -29,11 +29,12 @@ public class XRayActiveSessionsServiceParseTests
         var list = XRayActiveSessionsService.ParseGetUsersStats(json);
 
         Assert.Single(list);
-        Assert.Equal("cn-1", list[0].Email);
-        Assert.Equal("172.20.0.2", list[0].RemoteAddress);
-        Assert.Equal(11, list[0].BytesReceived);
-        Assert.Equal(22, list[0].BytesSent);
-        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1719043200), list[0].ConnectedSince);
+        Assert.Equal("cn-1", list[0].Session.Email);
+        Assert.Equal("172.20.0.2", list[0].Session.RemoteAddress);
+        Assert.Equal(11, list[0].Session.BytesReceived);
+        Assert.Equal(22, list[0].Session.BytesSent);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1719043200), list[0].Session.ConnectedSince);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1719043300), list[0].LastSeenUtc);
     }
 
     [Fact]
@@ -51,11 +52,11 @@ public class XRayActiveSessionsServiceParseTests
             """;
 
         var list = XRayActiveSessionsService.ParseGetUsersStats(json);
-        Assert.Equal("172.20.0.2", list[0].RemoteAddress);
+        Assert.Equal("172.20.0.2", list[0].Session.RemoteAddress);
     }
 
     [Fact]
-    public void ParseGetUsersStats_EmptyIps_StillReturnsUser()
+    public void ParseGetUsersStats_EmptyIps_StillReturnsUserWithoutLastSeen()
     {
         const string json = """
             { "users": [ { "email": "lonely", "traffic": { "uplink": 1, "downlink": 2 }, "ips": [] } ] }
@@ -63,8 +64,9 @@ public class XRayActiveSessionsServiceParseTests
 
         var list = XRayActiveSessionsService.ParseGetUsersStats(json);
         Assert.Single(list);
-        Assert.Equal("", list[0].RemoteAddress);
-        Assert.Equal(1, list[0].BytesReceived);
+        Assert.Equal("", list[0].Session.RemoteAddress);
+        Assert.Equal(1, list[0].Session.BytesReceived);
+        Assert.Null(list[0].LastSeenUtc);
     }
 
     [Fact]
@@ -79,19 +81,21 @@ public class XRayActiveSessionsServiceParseTests
             }
             """;
 
-        var dto = XRayActiveSessionsService.ParseSingleUserOnlineIpList(json, "user-a");
-        Assert.NotNull(dto);
-        Assert.Equal("172.20.0.2", dto!.RemoteAddress);
-        Assert.Equal("user-a", dto.Email);
-        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1719043200), dto.ConnectedSince);
+        var observation = XRayActiveSessionsService.ParseSingleUserOnlineIpList(json, "user-a");
+        Assert.NotNull(observation);
+        Assert.Equal("172.20.0.2", observation!.Session.RemoteAddress);
+        Assert.Equal("user-a", observation.Session.Email);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1719043200), observation.Session.ConnectedSince);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1719043400), observation.LastSeenUtc);
     }
 
     [Fact]
     public void ParseSingleUserOnlineIpList_NullIps_ReturnsEmptyRemote()
     {
-        var dto = XRayActiveSessionsService.ParseSingleUserOnlineIpList("""{"ips":null}""", "e");
-        Assert.NotNull(dto);
-        Assert.Equal("", dto!.RemoteAddress);
+        var observation = XRayActiveSessionsService.ParseSingleUserOnlineIpList("""{"ips":null}""", "e");
+        Assert.NotNull(observation);
+        Assert.Equal("", observation!.Session.RemoteAddress);
+        Assert.Null(observation.LastSeenUtc);
     }
 
     [Fact]
@@ -106,7 +110,7 @@ public class XRayActiveSessionsServiceParseTests
                 }
               ]
             }
-            """);
+            """).Select(o => o.Session).ToList();
 
         var proxies = new ActiveProxyConnectionService();
         proxies.Add(new ActiveProxyConnection
