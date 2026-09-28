@@ -237,10 +237,14 @@ public class ClientLinkServiceDnsPlaceholderTests
         var work = Directory.CreateTempSubdirectory("xray-dns-link-");
         try
         {
+            // Pin SNI / transport in configuration so parallel announce tests that mutate
+            // XRAY__DOMAIN / XRAY_CLIENT_LINK_TRANSPORT env cannot change the rendered URI.
             var pairs = new Dictionary<string, string?>
             {
                 ["XRAY_TRANSPORT_MODE"] = transportMode,
                 ["XRAY_DNS_IDENTITY_ENABLED"] = identity ? "true" : "false",
+                ["XRAY:DOMAIN"] = serverIp,
+                ["XRAY_CLIENT_LINK_TRANSPORT"] = "primary",
             };
             if (dns1 is not null) pairs["DNS1"] = dns1;
             if (dns2 is not null) pairs["DNS2"] = dns2;

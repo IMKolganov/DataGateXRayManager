@@ -68,6 +68,9 @@ public sealed class VpnServerAnnounceHostedService(
             logger.LogWarning(ex, "Failed to resolve public IP for VPN server announce.");
         }
 
+        // GetConfiguredPublicApiUrl already builds https://{XRAY__DOMAIN}:{XRAY_API_HTTPS_PORT}/
+        // when PUBLIC_API_URL is unset — do not pass domain into Resolve with API_PORT (5010),
+        // or announce would hit the wrong port.
         var apiPort = VpnServerAnnounceApiUrlResolver.ResolveApiPort(configuration);
         var apiUrl = VpnServerAnnounceApiUrlResolver.Resolve(
             VpnServerAnnounceApiUrlResolver.GetConfiguredPublicApiUrl(configuration),
@@ -77,7 +80,7 @@ public sealed class VpnServerAnnounceHostedService(
         if (string.IsNullOrWhiteSpace(apiUrl))
         {
             logger.LogWarning(
-                "Skipping VPN server announce: ApiUrl could not be resolved (set {PublicApiUrlKey} or ensure public IP is available).",
+                "Skipping VPN server announce: ApiUrl could not be resolved (set {PublicApiUrlKey}, XRAY_DOMAIN, or ensure public IP is available).",
                 VpnServerAnnounceApiUrlResolver.PublicApiUrlKey);
             return;
         }
