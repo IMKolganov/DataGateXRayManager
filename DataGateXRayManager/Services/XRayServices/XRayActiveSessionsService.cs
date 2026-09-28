@@ -17,6 +17,7 @@ public sealed class XRayActiveSessionsService(
     XRayProcessApi xrayApi,
     XRayCoreApiCapabilities apiCapabilities,
     IActiveProxyConnectionService activeProxyConnections,
+    IXrayStaleOnlineSessionFilter staleOnlineSessionFilter,
     ILogger<XRayActiveSessionsService> logger)
     : IXRayActiveSessionsService
 {
@@ -25,7 +26,8 @@ public sealed class XRayActiveSessionsService(
         var polledAt = DateTimeOffset.UtcNow;
         try
         {
-            var clients = await TryCollectOnlineClientsAsync(cancellationToken);
+            var observations = await TryCollectOnlineClientsAsync(cancellationToken);
+            var clients = staleOnlineSessionFilter.RetainActive(observations, polledAt);
             XRayProxyRealIpEnricher.Enrich(clients, activeProxyConnections);
             return new XrayClientsEnvelope { Clients = clients, PolledAt = polledAt };
         }
@@ -41,7 +43,8 @@ public sealed class XRayActiveSessionsService(
         }
     }
 
-    private async Task<List<XrayClientSessionDto>> TryCollectOnlineClientsAsync(CancellationToken cancellationToken)
+    private async Task<List<XrayOnlineClientObservation>> TryCollectOnlineClientsAsync(
+        CancellationToken cancellationToken)
     {
         var mode = await apiCapabilities.GetStatOnlineIpListModeAsync(cancellationToken);
 
@@ -54,7 +57,8 @@ public sealed class XRayActiveSessionsService(
         };
     }
 
-    private async Task<List<XrayClientSessionDto>> CollectViaAllWithTrafficAsync(CancellationToken cancellationToken)
+    private async Task<List<XrayOnlineClientObservation>> CollectViaAllWithTrafficAsync(
+        CancellationToken cancellationToken)
     {
         var stdout = await xrayApi.RunApiVerbAsync(["statsonlineiplist", "-all", "-include-traffic"], null,
             cancellationToken);
@@ -63,7 +67,8 @@ public sealed class XRayActiveSessionsService(
         return withTraffic;
     }
 
-    private async Task<List<XrayClientSessionDto>> CollectViaAllWithoutTrafficAsync(CancellationToken cancellationToken)
+    private async Task<List<XrayOnlineClientObservation>> CollectViaAllWithoutTrafficAsync(
+        CancellationToken cancellationToken)
     {
         var stdout = await xrayApi.RunApiVerbAsync(["statsonlineiplist", "-all"], null, cancellationToken);
         var withoutTraffic = ParseGetUsersStats(stdout);
@@ -71,23 +76,24 @@ public sealed class XRayActiveSessionsService(
         return withoutTraffic;
     }
 
-    private async Task<List<XrayClientSessionDto>> CollectViaLegacyPerEmailAsync(CancellationToken cancellationToken)
+    private async Task<List<XrayOnlineClientObservation>> CollectViaLegacyPerEmailAsync(
+        CancellationToken cancellationToken)
     {
         var listStdout = await xrayApi.RunApiVerbAsync(["statsgetallonlineusers"], null, cancellationToken);
         var emails = ParseAllOnlineUserStatNames(listStdout);
         if (emails.Count == 0)
             return [];
 
-        var list = new List<XrayClientSessionDto>();
+        var list = new List<XrayOnlineClientObservation>();
         foreach (var email in emails)
         {
             try
             {
                 var oneStdout =
                     await xrayApi.RunApiVerbAsync(["statsonlineiplist", "-email", email], null, cancellationToken);
-                var dto = ParseSingleUserOnlineIpList(oneStdout, email);
-                if (dto is not null)
-                    list.Add(dto);
+                var observation = ParseSingleUserOnlineIpList(oneStdout, email);
+                if (observation is not null)
+                    list.Add(observation);
             }
             catch (Exception ex)
             {
@@ -103,10 +109,10 @@ public sealed class XRayActiveSessionsService(
     /// Per-user traffic is absent from <c>statsonlineiplist -email</c> and from <c>-all</c> without <c>-include-traffic</c>.
     /// Reads Xray user-level counters (requires stats / policy in config — see Project X docs).
     /// </summary>
-    private async Task EnrichZeroTrafficFromUserStatCountersAsync(List<XrayClientSessionDto> list,
+    private async Task EnrichZeroTrafficFromUserStatCountersAsync(List<XrayOnlineClientObservation> list,
         CancellationToken cancellationToken)
     {
-        foreach (var c in list)
+        foreach (var c in list.Select(o => o.Session))
         {
             if (c.BytesReceived != 0 || c.BytesSent != 0)
                 continue;
@@ -200,7 +206,7 @@ public sealed class XRayActiveSessionsService(
     }
 
     /// <summary>Parses <c>GetStatsOnlineIpListResponse</c> (single user) from older cores.</summary>
-    internal static XrayClientSessionDto? ParseSingleUserOnlineIpList(string stdout, string email)
+    internal static XrayOnlineClientObservation? ParseSingleUserOnlineIpList(string stdout, string email)
     {
         if (string.IsNullOrWhiteSpace(stdout))
             return null;
@@ -209,18 +215,21 @@ public sealed class XRayActiveSessionsService(
         var ipsToken = root["ips"] ?? root["Ips"];
         if (ipsToken is null || ipsToken.Type == JTokenType.Null)
         {
-            return new XrayClientSessionDto
-            {
-                Email = email,
-                RemoteAddress = "",
-                Username = email,
-                BytesReceived = 0,
-                BytesSent = 0,
-                ConnectedSince = DateTimeOffset.UtcNow
-            };
+            return new XrayOnlineClientObservation(
+                new XrayClientSessionDto
+                {
+                    Email = email,
+                    RemoteAddress = "",
+                    Username = email,
+                    BytesReceived = 0,
+                    BytesSent = 0,
+                    ConnectedSince = DateTimeOffset.UtcNow
+                },
+                LastSeenUtc: null);
         }
 
         DateTimeOffset? minSeen = null;
+        DateTimeOffset? maxSeen = null;
         string? primaryPublic = null;
         string? primaryPrivate = null;
 
@@ -232,9 +241,7 @@ public sealed class XRayActiveSessionsService(
                 ConsiderIp(ip, ref primaryPublic, ref primaryPrivate);
 
                 var ls = ipEntry["lastSeen"] ?? ipEntry["LastSeen"];
-                var dto = ParseLastSeen(ls);
-                if (dto.HasValue && (minSeen is null || dto.Value < minSeen))
-                    minSeen = dto;
+                ConsiderLastSeen(ParseLastSeen(ls), ref minSeen, ref maxSeen);
             }
         }
         else if (ipsToken is JObject map)
@@ -251,20 +258,21 @@ public sealed class XRayActiveSessionsService(
                 else if (v is JObject jo)
                     dto = ParseLastSeen(jo["lastSeen"] ?? jo["LastSeen"]);
 
-                if (dto.HasValue && (minSeen is null || dto.Value < minSeen))
-                    minSeen = dto;
+                ConsiderLastSeen(dto, ref minSeen, ref maxSeen);
             }
         }
 
-        return new XrayClientSessionDto
-        {
-            Email = email,
-            RemoteAddress = primaryPrivate ?? primaryPublic ?? "",
-            Username = email,
-            BytesReceived = 0,
-            BytesSent = 0,
-            ConnectedSince = minSeen ?? DateTimeOffset.UtcNow
-        };
+        return new XrayOnlineClientObservation(
+            new XrayClientSessionDto
+            {
+                Email = email,
+                RemoteAddress = primaryPrivate ?? primaryPublic ?? "",
+                Username = email,
+                BytesReceived = 0,
+                BytesSent = 0,
+                ConnectedSince = minSeen ?? DateTimeOffset.UtcNow
+            },
+            maxSeen);
     }
 
     private static DateTimeOffset? ParseLastSeenFromUnix(long v)
@@ -276,9 +284,9 @@ public sealed class XRayActiveSessionsService(
         return null;
     }
 
-    internal static List<XrayClientSessionDto> ParseGetUsersStats(string stdout)
+    internal static List<XrayOnlineClientObservation> ParseGetUsersStats(string stdout)
     {
-        var list = new List<XrayClientSessionDto>();
+        var list = new List<XrayOnlineClientObservation>();
         if (string.IsNullOrWhiteSpace(stdout))
             return list;
 
@@ -300,19 +308,22 @@ public sealed class XRayActiveSessionsService(
             var ips = u["ips"] as JArray ?? u["Ips"] as JArray ?? u["IPs"] as JArray;
             if (ips is null || ips.Count == 0)
             {
-                list.Add(new XrayClientSessionDto
-                {
-                    Email = email,
-                    RemoteAddress = "",
-                    Username = email,
-                    BytesReceived = uplink,
-                    BytesSent = downlink,
-                    ConnectedSince = DateTimeOffset.UtcNow
-                });
+                list.Add(new XrayOnlineClientObservation(
+                    new XrayClientSessionDto
+                    {
+                        Email = email,
+                        RemoteAddress = "",
+                        Username = email,
+                        BytesReceived = uplink,
+                        BytesSent = downlink,
+                        ConnectedSince = DateTimeOffset.UtcNow
+                    },
+                    LastSeenUtc: null));
                 continue;
             }
 
             DateTimeOffset? minSeen = null;
+            DateTimeOffset? maxSeen = null;
             string? primaryPublic = null;
             string? primaryPrivate = null;
             foreach (var ipEntry in ips.OfType<JObject>())
@@ -321,23 +332,40 @@ public sealed class XRayActiveSessionsService(
                 ConsiderIp(ip, ref primaryPublic, ref primaryPrivate);
 
                 var ls = ipEntry["lastSeen"] ?? ipEntry["LastSeen"];
-                var dto = ParseLastSeen(ls);
-                if (dto.HasValue && (minSeen is null || dto.Value < minSeen))
-                    minSeen = dto;
+                ConsiderLastSeen(ParseLastSeen(ls), ref minSeen, ref maxSeen);
             }
 
-            list.Add(new XrayClientSessionDto
-            {
-                Email = email,
-                RemoteAddress = primaryPrivate ?? primaryPublic ?? "",
-                Username = email,
-                BytesReceived = uplink,
-                BytesSent = downlink,
-                ConnectedSince = minSeen ?? DateTimeOffset.UtcNow
-            });
+            list.Add(new XrayOnlineClientObservation(
+                new XrayClientSessionDto
+                {
+                    Email = email,
+                    RemoteAddress = primaryPrivate ?? primaryPublic ?? "",
+                    Username = email,
+                    BytesReceived = uplink,
+                    BytesSent = downlink,
+                    ConnectedSince = minSeen ?? DateTimeOffset.UtcNow
+                },
+                maxSeen));
         }
 
         return list;
+    }
+
+    /// <summary>
+    /// <c>ConnectedSince</c> uses the oldest <c>lastSeen</c> so the dashboard session key stays stable,
+    /// while staleness detection needs the newest one.
+    /// </summary>
+    private static void ConsiderLastSeen(DateTimeOffset? lastSeen, ref DateTimeOffset? minSeen,
+        ref DateTimeOffset? maxSeen)
+    {
+        if (!lastSeen.HasValue)
+            return;
+
+        if (minSeen is null || lastSeen.Value < minSeen)
+            minSeen = lastSeen;
+
+        if (maxSeen is null || lastSeen.Value > maxSeen)
+            maxSeen = lastSeen;
     }
 
     /// <summary>Prefer the private/docker peer for RemoteAddress (stable session key); public goes to ProxyRealIp via enricher.</summary>

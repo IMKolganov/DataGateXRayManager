@@ -15,6 +15,30 @@ public class XRayUserService(
 {
     private string InboundTag => configuration["XRay:InboundTag"] ?? "vless-in";
 
+    /// <summary>
+    /// Primary inbound plus optional extra transports (e.g. the xHTTP one). <c>entrypoint.sh</c> sets
+    /// <c>XRay__ExtraInboundTags</c> only for inbounds present in the rendered config, so a client is
+    /// never announced to a tag that does not exist.
+    /// </summary>
+    private IReadOnlyList<string> InboundTags
+    {
+        get
+        {
+            var tags = new List<string> { InboundTag };
+            var extra = configuration["XRay:ExtraInboundTags"];
+            if (string.IsNullOrWhiteSpace(extra))
+                return tags;
+
+            foreach (var tag in extra.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!tags.Contains(tag, StringComparer.OrdinalIgnoreCase))
+                    tags.Add(tag);
+            }
+
+            return tags;
+        }
+    }
+
     private string DefaultFlow => configuration["XRay:DefaultClientFlow"] ?? "";
 
     private string IdentitySubnet => configuration["XRAY_DNS_IDENTITY_SUBNET"]
@@ -23,7 +47,7 @@ public class XRayUserService(
 
     public async Task KickInboundUserAsync(string commonName, CancellationToken cancellationToken)
     {
-        await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken, XRayApiCallOptions.Default);
+        await RemoveUserFromInboundsAsync(commonName, cancellationToken);
 
         // rmu drops the user from the running inbound only; clients.store.json still lists them. Without a
         // follow-up adu, reconnects fail (unknown UUID). Re-push active store rows so "kick" = drop session, keep credential.
@@ -34,9 +58,61 @@ public class XRayUserService(
         if (client is null)
             return;
 
-        var userJson = BuildAddUserJson(client.CommonName, client.Uuid, client.Flow ?? "");
-        await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken, XRayApiCallOptions.Default);
+        await AddUserToInboundsAsync(client.CommonName, client.Uuid, client.Flow ?? "", cancellationToken);
         logger.LogInformation("Kick: re-added {CommonName} to running Xray after rmu.", commonName);
+    }
+
+    /// <summary>
+    /// Pushes the client to every inbound. The primary tag propagates failures because callers treat them as
+    /// fatal; extra transports only warn, so an optional inbound can never block client creation or a kick.
+    /// </summary>
+    private async Task AddUserToInboundsAsync(string email, string uuid, string flow, CancellationToken cancellationToken)
+    {
+        var tags = InboundTags;
+        for (var i = 0; i < tags.Count; i++)
+        {
+            var userJson = BuildAddUserJson(email, uuid, flow, tags[i]);
+            if (i == 0)
+            {
+                await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken, XRayApiCallOptions.Default);
+                continue;
+            }
+
+            try
+            {
+                await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken, XRayApiCallOptions.Default);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Could not add {CommonName} to extra inbound {Tag}; the client still works on {PrimaryTag}.",
+                    email, tags[i], tags[0]);
+            }
+        }
+    }
+
+    private async Task RemoveUserFromInboundsAsync(string commonName, CancellationToken cancellationToken)
+    {
+        var tags = InboundTags;
+        for (var i = 0; i < tags.Count; i++)
+        {
+            if (i == 0)
+            {
+                await xrayApi.RunApiVerbAsync(["rmu", $"-tag={tags[0]}", commonName], null, cancellationToken,
+                    XRayApiCallOptions.Default);
+                continue;
+            }
+
+            try
+            {
+                await xrayApi.RunApiVerbAsync(["rmu", $"-tag={tags[i]}", commonName], null, cancellationToken,
+                    XRayApiCallOptions.Default);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Could not remove {CommonName} from extra inbound {Tag}.", commonName, tags[i]);
+            }
+        }
     }
 
     public async Task<int> RehydrateRunningXrayFromStoreAsync(string dataDir, CancellationToken cancellationToken)
@@ -63,8 +139,7 @@ public class XRayUserService(
                 continue;
             try
             {
-                var userJson = BuildAddUserJson(c.CommonName, c.Uuid, c.Flow ?? "");
-                await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken, XRayApiCallOptions.Default);
+                await AddUserToInboundsAsync(c.CommonName, c.Uuid, c.Flow ?? "", cancellationToken);
                 logger.LogInformation("Rehydrated Xray VLESS client {CommonName} (UUID={Uuid}).", c.CommonName, c.Uuid);
                 ok++;
             }
@@ -138,8 +213,7 @@ public class XRayUserService(
         }
         else
         {
-            var userJson = BuildAddUserJson(client.CommonName, client.Uuid, client.Flow ?? "");
-            await xrayApi.RunApiVerbAsync(["adu", "stdin:"], userJson, cancellationToken, XRayApiCallOptions.Default);
+            await AddUserToInboundsAsync(client.CommonName, client.Uuid, client.Flow ?? "", cancellationToken);
         }
 
         logger.LogInformation(
@@ -186,7 +260,7 @@ public class XRayUserService(
                 throw new InvalidOperationException($"Client '{commonName}' not found.");
 
             client = found;
-            await xrayApi.RunApiVerbAsync(["rmu", $"-tag={InboundTag}", commonName], null, cancellationToken, XRayApiCallOptions.Default);
+            await RemoveUserFromInboundsAsync(commonName, cancellationToken);
 
             client.IsRevoked = true;
             client.RevokedUtc = DateTime.UtcNow;
@@ -216,13 +290,13 @@ public class XRayUserService(
     /// JSON for <c>xray api adu stdin:</c>: must deserialize to an Xray config root with <c>inbounds</c>
     /// (see xray-core <c>extractInboundsConfig</c> / <c>inbound_user_add.go</c>). Each new VLESS client must have non-empty <c>email</c>.
     /// </summary>
-    private string BuildAddUserJson(string email, string uuid, string flow)
+    private string BuildAddUserJson(string email, string uuid, string flow, string inboundTag)
     {
         var template = configuration["XRay:AduUserJsonTemplate"];
         if (!string.IsNullOrWhiteSpace(template))
         {
             return template
-                .Replace("{{inboundTag}}", InboundTag, StringComparison.Ordinal)
+                .Replace("{{inboundTag}}", inboundTag, StringComparison.Ordinal)
                 .Replace("{{email}}", email, StringComparison.Ordinal)
                 .Replace("{{uuid}}", uuid, StringComparison.Ordinal)
                 .Replace("{{flow}}", flow ?? "", StringComparison.Ordinal);
@@ -239,7 +313,7 @@ public class XRayUserService(
 
         var inbound = new JObject
         {
-            ["tag"] = InboundTag,
+            ["tag"] = inboundTag,
             ["listen"] = "0.0.0.0",
             ["port"] = 1,
             ["protocol"] = "vless",
