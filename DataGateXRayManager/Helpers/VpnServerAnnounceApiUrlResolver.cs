@@ -51,8 +51,7 @@ public static class VpnServerAnnounceApiUrlResolver
     /// </summary>
     public static string? GetConfiguredPublicApiUrl(IConfiguration configuration)
     {
-        var explicitUrl = Environment.GetEnvironmentVariable(PublicApiUrlKey)
-            ?? configuration[PublicApiUrlKey];
+        var explicitUrl = configuration[PublicApiUrlKey];
         if (!string.IsNullOrWhiteSpace(explicitUrl))
             return EnsureTrailingSlash(explicitUrl.Trim());
 
@@ -60,16 +59,16 @@ public static class VpnServerAnnounceApiUrlResolver
     }
 
     /// <summary>
-    /// Site <c>PUBLIC_IP</c> / compose <c>XRAY__IP</c> when set; else DNS A-record of <c>XRAY__DOMAIN</c>.
+    /// Site <c>PUBLIC_IP</c> / compose <c>XRAY__IP</c> when set.
+    /// Reads <see cref="IConfiguration"/> only (host builder already maps process env into config).
     /// </summary>
     public static string? GetConfiguredPublicIp(IConfiguration configuration)
     {
         foreach (var raw in new[]
                  {
-                     Environment.GetEnvironmentVariable(PublicIpKey),
                      configuration[PublicIpKey],
-                     Environment.GetEnvironmentVariable("XRAY__IP"),
-                     configuration[XrayConfiguredIpKey]
+                     configuration[XrayConfiguredIpKey],
+                     configuration["XRAY__IP"]
                  })
         {
             if (TryParseConfiguredPublicIp(raw, out var ip))
@@ -181,8 +180,7 @@ public static class VpnServerAnnounceApiUrlResolver
 
     public static int ResolveApiPort(IConfiguration configuration)
     {
-        var raw = Environment.GetEnvironmentVariable("API_PORT")
-            ?? configuration["API_PORT"];
+        var raw = configuration["API_PORT"];
         if (int.TryParse(raw, out var port) && port > 0)
             return port;
         return DefaultApiPort;

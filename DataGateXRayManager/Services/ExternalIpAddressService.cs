@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using DataGateXRayManager.Helpers;
 using DataGateXRayManager.Services.Interfaces;
 using Microsoft.Extensions.Caching.Memory;
 
@@ -22,6 +23,11 @@ public sealed class ExternalIpAddressService(
 
     public async Task<string?> GetPublicIpAddressAsync(CancellationToken cancellationToken)
     {
+        // Install sets PUBLIC_IP / XRAY__IP — prefer over ifconfig/ipify (often blocked on VPS).
+        var configured = VpnServerAnnounceApiUrlResolver.GetConfiguredPublicIp(configuration);
+        if (configured is not null)
+            return configured;
+
         if (TryGetCached(out var cached, out var hit))
             return hit ? cached : null;
 
@@ -107,14 +113,16 @@ public sealed class ExternalIpAddressService(
         if (string.IsNullOrWhiteSpace(raw))
             return false;
 
+        // Take first token/line in case providers append whitespace or noise.
         var candidate = raw.Split(['\r', '\n', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries)[0];
         if (!IPAddress.TryParse(candidate, out var address))
             return false;
 
-        if (address.AddressFamily is not (AddressFamily.InterNetwork or AddressFamily.InterNetworkV6))
+        // Client export / remote expect public IPv4. Dual-stack providers often return IPv6 first.
+        if (address.AddressFamily != AddressFamily.InterNetwork)
             return false;
 
-        if (IPAddress.IsLoopback(address) || address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any))
+        if (IPAddress.IsLoopback(address) || address.Equals(IPAddress.Any))
             return false;
 
         ip = address.ToString();
