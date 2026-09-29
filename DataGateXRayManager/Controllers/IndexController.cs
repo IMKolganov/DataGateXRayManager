@@ -1,6 +1,7 @@
 using System.Reflection;
 using DataGateMonitor.SharedModels.DataGateXRayManager.Info;
 using DataGateMonitor.SharedModels.Responses;
+using DataGateXRayManager.Helpers;
 using DataGateXRayManager.Services.Interfaces;
 using DataGateXRayManager.Services.XRayServices;
 using Microsoft.AspNetCore.Mvc;
@@ -25,7 +26,9 @@ public class IndexController(
             string? publicIp = null;
             try
             {
-                publicIp = await externalIpAddressService.GetPublicIpAddressAsync(cancellationToken);
+                // Same chain as self-announce: PUBLIC_IP / XRAY__IP → domain DNS → external lookup.
+                publicIp = await VpnServerAnnounceApiUrlResolver.ResolvePublicIpForAnnounceAsync(
+                    config, externalIpAddressService, cancellationToken);
             }
             catch (Exception ex)
             {

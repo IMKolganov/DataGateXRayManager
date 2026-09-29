@@ -73,4 +73,26 @@ public class IndexControllerTests
         Assert.NotNull(response.Data!.Config);
         Assert.Null(response.Data.PublicIp);
     }
+
+    [Fact]
+    public async Task Get_WhenPublicIpConfigured_ReturnsItWithoutExternalLookup()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["PUBLIC_IP"] = "81.27.109.193",
+            ["PORT"] = "443"
+        }).Build();
+        _externalIp.Setup(x => x.GetPublicIpAddressAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("should not be called"));
+
+        var controller = new IndexController(config, _env.Object, _logger.Object, _externalIp.Object);
+        var result = await controller.Get(CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var response = Assert.IsType<ApiResponse<RootXrayInfoResponse>>(ok.Value);
+        Assert.Equal("81.27.109.193", response.Data!.PublicIp);
+        _externalIp.Verify(
+            x => x.GetPublicIpAddressAsync(It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 }
