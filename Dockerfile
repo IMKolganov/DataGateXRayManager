@@ -34,9 +34,11 @@ RUN apt-get update && \
         iproute2 \
         && rm -rf /var/lib/apt/lists/*
 
-# Latest stable GitHub release if XRAY_VERSION build-arg is empty; override e.g. --build-arg XRAY_VERSION=26.3.27
+# Pinned to the ./xray submodule tag. Override with --build-arg XRAY_VERSION=26.10.21.
+# Empty XRAY_VERSION still resolves to the latest GitHub release at build time.
+# The image downloads the release zip; the submodule checkout is not copied in.
 # TARGETARCH is set by BuildKit (e.g. amd64, arm64); must match the runtime image arch — not always linux-64.zip.
-ARG XRAY_VERSION=
+ARG XRAY_VERSION=26.10.21
 ARG TARGETARCH
 RUN set -eux; \
     ARCH="${TARGETARCH:-amd64}"; \
