@@ -106,6 +106,19 @@ internal sealed class PiHoleEnvOverrides
             options.ClientSubnetExcludePrefixes = ClientSubnetExcludePrefixes;
     }
 
+    // Bootstrap values are defaults, so persisted dashboard configuration can replace them.
+    public static void ApplyBootstrap(IConfiguration config, PiHoleOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(config["PIHOLE_BOOTSTRAP_BASE_URL"]))
+            options.BaseUrl = config["PIHOLE_BOOTSTRAP_BASE_URL"]!;
+        if (!string.IsNullOrWhiteSpace(config["PIHOLE_BOOTSTRAP_APP_PASSWORD"]))
+            options.AppPassword = config["PIHOLE_BOOTSTRAP_APP_PASSWORD"]!;
+        if (!string.IsNullOrWhiteSpace(config["PIHOLE_BOOTSTRAP_CLIENT_SUBNET_PREFIX"]))
+            options.ClientSubnetPrefix = config["PIHOLE_BOOTSTRAP_CLIENT_SUBNET_PREFIX"]!;
+        if (!string.IsNullOrWhiteSpace(config["PIHOLE_BOOTSTRAP_CLIENT_SUBNET_EXCLUDE_PREFIXES"]))
+            options.ClientSubnetExcludePrefixes = config["PIHOLE_BOOTSTRAP_CLIENT_SUBNET_EXCLUDE_PREFIXES"]!;
+    }
+
     public static void ApplyLegacyEnv(IConfiguration config, PiHoleOptions options) =>
         FromConfiguration(config).ApplyTo(options);
 
