@@ -49,6 +49,9 @@ public class SyncDnsIdentityScriptUnitTests
             Assert.Contains("dns-id-10-80-0-2", once);
             Assert.Contains("\"sendThrough\": \"10.80.0.2\"", once);
             Assert.Contains("\"port\": \"53\"", once);
+            Assert.Contains("\"finalRules\"", once);
+            Assert.Contains("\"action\": \"allow\"", once);
+            Assert.Contains("\"172.20.0.1\"", once);
 
             await File.WriteAllTextAsync(configPath, once);
             var twice = await RunJqTransformAsync(configPath, clients);
@@ -70,19 +73,29 @@ public class SyncDnsIdentityScriptUnitTests
             | . as $root
             | reduce $clients[] as $c (
                 $root;
-                if ($c.identityIp != null and $c.identityIp != "" and $c.commonName != null and $c.commonName != "") then
+                if ($pihole | length) > 0 and ($c.identityIp != null and $c.identityIp != "" and $c.commonName != null and $c.commonName != "") then
                   ($prefix + ($c.identityIp | gsub("\\."; "-"))) as $tag
                   | .outbounds += [{
                       protocol: "freedom",
                       tag: $tag,
                       sendThrough: $c.identityIp,
-                      settings: {}
+                      settings: {
+                        finalRules: [
+                          {
+                            action: "allow",
+                            network: "tcp,udp",
+                            port: "53",
+                            ip: $pihole
+                          }
+                        ]
+                      }
                     }]
                   | .routing.rules = (
                       [
                         {
                           type: "field",
                           user: [$c.commonName],
+                          ip: $pihole,
                           port: "53",
                           network: "tcp,udp",
                           outboundTag: $tag
@@ -103,6 +116,9 @@ public class SyncDnsIdentityScriptUnitTests
         psi.ArgumentList.Add("--argjson");
         psi.ArgumentList.Add("clients");
         psi.ArgumentList.Add(clientsJson);
+        psi.ArgumentList.Add("--argjson");
+        psi.ArgumentList.Add("pihole");
+        psi.ArgumentList.Add("""["172.20.0.1"]""");
         psi.ArgumentList.Add("--arg");
         psi.ArgumentList.Add("prefix");
         psi.ArgumentList.Add("dns-id-");
