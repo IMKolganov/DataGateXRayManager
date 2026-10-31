@@ -86,7 +86,9 @@ public class PiHoleController(
                 statusStore.GetSnapshot(),
                 cursorStore.GetLastUntilUtc(),
                 probe,
-                runtimeOptions.PersistedAppliedAtUtc);
+                runtimeOptions.PersistedAppliedAtUtc,
+                runtimeOptions.CredentialSource,
+                runtimeOptions.AnnounceState);
             response.HealthMessage = dnsIdentitySync.IsEnabled
                 ? "Xray node collector; CN via IdentityIp when client DNS uses Pi-hole through the tunnel."
                 : "Xray node collector; enable XRAY_DNS_IDENTITY_* for per-user CN mapping via IdentityIp.";

@@ -5,13 +5,13 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <RootNamespace>DataGateXRayManager</RootNamespace>
-        <Version>1.1.2.30</Version>
-        <AssemblyVersion>1.1.2.30</AssemblyVersion>
-        <FileVersion>1.1.2.30</FileVersion>
+        <Version>1.1.2.31</Version>
+        <AssemblyVersion>1.1.2.31</AssemblyVersion>
+        <FileVersion>1.1.2.31</FileVersion>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="DataGateMonitor.SharedModels" Version="1.0.86" />
+        <PackageReference Include="DataGateMonitor.SharedModels" Version="1.0.87" />
     </ItemGroup>
 
     <ItemGroup>
