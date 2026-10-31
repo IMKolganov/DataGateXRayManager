@@ -1,6 +1,6 @@
 #!/bin/bash
 # Sync per-user DNS identity IPs: iface aliases + Xray freedom sendThrough outbounds for :53 + restart.
-# Env: CONFIG_PATH, XRAY_PID_FILE, XRAY_DNS_IDENTITY_IFACE, XRAY_DNS_IDENTITY_SUBNET
+# Env: CONFIG_PATH, XRAY_PID_FILE, XRAY_DNS_IDENTITY_IFACE, XRAY_DNS_IDENTITY_SUBNET, DNS1, DNS2
 # Args: optional path to JSON array [{"commonName":"...","identityIp":"..."}, ...]
 #   or reads CLIENTS_JSON env / stdin.
 set -euo pipefail
@@ -33,29 +33,51 @@ echo "[dns-identity] Syncing identity IPs on $IFACE (subnet $SUBNET) into $CONFI
 
 mapfile -t DESIRED_IPS < <(echo "$CLIENTS_JSON" | jq -r '.[].identityIp // empty' | sort -u)
 
+# Pi-hole addresses are DNS1/DNS2 when private. Public resolvers stay on the default outbound: identity
+# sources have no NAT, so their queries would never get a reply.
+PIHOLE_IPS_JSON="$(jq -cn --arg dns1 "${DNS1:-}" --arg dns2 "${DNS2:-}" '
+  [$dns1, $dns2]
+  | map(gsub("^\\s+|\\s+$"; ""))
+  | map(select(test("^(10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)[0-9.]+$")))
+  | unique
+')"
+if [[ "$PIHOLE_IPS_JSON" == "[]" ]]; then
+  echo "[dns-identity] WARNING: DNS1/DNS2 hold no private Pi-hole address; skipping identity routing." >&2
+fi
+
 TMP="$(mktemp --suffix=.json)"
 trap 'rm -f "$TMP"' EXIT
 
 # Build new config first; validate before touching aliases or live process.
-jq --argjson clients "$CLIENTS_JSON" --arg prefix "$TAG_PREFIX" '
+jq --argjson clients "$CLIENTS_JSON" --argjson pihole "$PIHOLE_IPS_JSON" --arg prefix "$TAG_PREFIX" '
   .outbounds = ((.outbounds // []) | map(select((.tag // "") | startswith($prefix) | not)))
   | .routing.rules = ((.routing.rules // []) | map(select((.outboundTag // "") | startswith($prefix) | not)))
   | . as $root
   | reduce $clients[] as $c (
       $root;
-      if ($c.identityIp != null and $c.identityIp != "" and $c.commonName != null and $c.commonName != "") then
+      if ($pihole | length) > 0 and ($c.identityIp != null and $c.identityIp != "" and $c.commonName != null and $c.commonName != "") then
         ($prefix + ($c.identityIp | gsub("\\."; "-"))) as $tag
         | .outbounds += [{
             protocol: "freedom",
             tag: $tag,
             sendThrough: $c.identityIp,
-            settings: {}
+            settings: {
+              finalRules: [
+                {
+                  action: "allow",
+                  network: "tcp,udp",
+                  port: "53",
+                  ip: $pihole
+                }
+              ]
+            }
           }]
         | .routing.rules = (
             [
               {
                 type: "field",
                 user: [$c.commonName],
+                ip: $pihole,
                 port: "53",
                 network: "tcp,udp",
                 outboundTag: $tag
