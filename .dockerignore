@@ -4,3 +4,5 @@
 **/.vs/
 **/data/
 .git/
+# Upstream Xray-core pin (git submodule). The image downloads the release zip.
+/xray/

@@ -68,6 +68,8 @@ export CONFIG_PATH=/tmp/smoke/xray/config.json
 export XRAY_PID_FILE=/tmp/smoke/xray/xray.pid
 export XRAY_DNS_IDENTITY_IFACE=\"\$IFACE\"
 export XRAY_DNS_IDENTITY_SUBNET=10.80.0.0/24
+export DNS1=172.20.0.1
+export DNS2=8.8.8.8
 export CLIENTS_JSON='[{\"commonName\":\"user-a\",\"identityIp\":\"10.80.0.2\"},{\"commonName\":\"user-b\",\"identityIp\":\"10.80.0.3\"}]'
 
 run_once() {
@@ -91,7 +93,12 @@ jq -e '
   ([.outbounds[] | select(.tag|startswith(\"dns-id-\"))] | length) == 2
   and ([.routing.rules[] | select(.port==\"53\")] | length) == 2
   and (.outbounds[] | select(.tag==\"dns-id-10-80-0-2\") | .sendThrough) == \"10.80.0.2\"
+  and (.outbounds[] | select(.tag==\"dns-id-10-80-0-2\") | .settings.finalRules[0].ip) == [\"172.20.0.1\"]
+  and ([.routing.rules[] | select(.port==\"53\") | .ip] | unique) == [[\"172.20.0.1\"]]
 ' \"\$CONFIG_PATH\" >/dev/null
+
+# Xray-core must accept the generated finalRules.
+timeout \"\${DEADLINE}s\" xray run -test -config \"\$CONFIG_PATH\" >/dev/null
 
 ip -o -4 addr show dev \"\$IFACE\" | awk '{print \$4}' | grep -qx '10.80.0.2/32'
 ip -o -4 addr show dev \"\$IFACE\" | awk '{print \$4}' | grep -qx '10.80.0.3/32'
