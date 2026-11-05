@@ -415,6 +415,73 @@ write_reality() {
     }' >"$CONFIG_PATH"
 }
 
+# Blocked destinations from the VPN installer (blocklist/ru-services.*): one domain or CIDR per line, '#'
+# comments. Every proxy inbound sniffs HTTP/TLS/QUIC, so a domain rule matches the SNI even when the
+# client dials an IP — it covers shared-CDN hosts that the host firewall cannot reject by address.
+apply_blocklist() {
+  local domains_file="${XRAY_BLOCKLIST_DOMAINS_FILE:-}"
+  local cidrs_file="${XRAY_BLOCKLIST_CIDRS_FILE:-}"
+  [ -n "$domains_file$cidrs_file" ] || return 0
+
+  local skip="[xray-config] WARNING: blocklist routing was skipped —"
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "$skip jq is missing." >&2
+    return 0
+  fi
+
+  local domains='[]' cidrs='[]'
+  if [ -n "$domains_file" ]; then
+    if [ ! -f "$domains_file" ]; then
+      echo "$skip domain list not found: $domains_file" >&2
+      return 0
+    fi
+    domains=$(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$domains_file" \
+      | { grep -E '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$' || true; } \
+      | jq -R -s -c 'split("\n") | map(select(length > 0) | "domain:" + .)')
+  fi
+  if [ -n "$cidrs_file" ]; then
+    if [ ! -f "$cidrs_file" ]; then
+      echo "$skip CIDR list not found: $cidrs_file" >&2
+      return 0
+    fi
+    cidrs=$(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$cidrs_file" \
+      | { grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$' || true; } \
+      | jq -R -s -c 'split("\n") | map(select(length > 0))')
+  fi
+  if [ "$domains" = "[]" ] && [ "$cidrs" = "[]" ]; then
+    echo "$skip both lists are empty." >&2
+    return 0
+  fi
+
+  echo "[xray-config] blocklist: $(jq length <<<"$domains") domain(s), $(jq length <<<"$cidrs") range(s) -> blackhole"
+  local backup="${CONFIG_PATH}.pre-blocklist"
+  local tmp="${CONFIG_PATH}.blocklist.tmp"
+  cp -f "$CONFIG_PATH" "$backup"
+  # Block rules go right after the API rule(s), which must keep their own route, and before anything else.
+  # A re-run replaces the previous block rules instead of stacking them.
+  if ! jq --argjson domains "$domains" --argjson cidrs "$cidrs" '
+      def is_api: (.inboundTag // []) | index("api") != null;
+      ([ if ($domains | length) > 0 then {type: "field", domain: $domains, outboundTag: "blocked"} else empty end,
+         if ($cidrs | length) > 0 then {type: "field", ip: $cidrs, outboundTag: "blocked"} else empty end ]) as $block
+      | .outbounds = ([.outbounds[]? | select(.tag != "blocked")] + [{protocol: "blackhole", tag: "blocked"}])
+      | .routing = (.routing // {})
+      | [.routing.rules[]? | select(.outboundTag != "blocked")] as $rules
+      | .routing.rules = ([$rules[] | select(is_api)] + $block + [$rules[] | select(is_api | not)])
+    ' "$CONFIG_PATH" >"$tmp"; then
+    echo "$skip jq patch failed; keeping the config without it." >&2
+    rm -f "$tmp" "$backup"
+    return 0
+  fi
+  mv "$tmp" "$CONFIG_PATH"
+
+  if ! validate_config; then
+    echo "$skip the patched config did not pass validation; rolled back to the working one." >&2
+    mv -f "$backup" "$CONFIG_PATH"
+    return 0
+  fi
+  rm -f "$backup"
+}
+
 main() {
   if [ -n "${XRAY_EXTERNAL_CONFIG_PATH:-}" ] && [ -f "$XRAY_EXTERNAL_CONFIG_PATH" ]; then
     echo "[xray-config] Using external config: $XRAY_EXTERNAL_CONFIG_PATH"
@@ -428,6 +495,7 @@ main() {
     apply_accept_proxy_protocol
     apply_xhttp_inbound
     apply_tcp_keepalive
+    apply_blocklist
     return 0
   fi
 
@@ -455,6 +523,7 @@ main() {
   apply_accept_proxy_protocol
   apply_xhttp_inbound
   apply_tcp_keepalive
+  apply_blocklist
 }
 
 main "$@"
