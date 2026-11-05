@@ -58,6 +58,14 @@ the node's current settings. So transport, DNS and xHTTP changes reach existing 
 credentials or touching the dashboard template. If the template is missing, the client is revoked, or rendering
 fails, the stored file is served unchanged.
 
+### Blocked destinations
+
+`XRAY_BLOCKLIST_DOMAINS_FILE` and `XRAY_BLOCKLIST_CIDRS_FILE` (one domain or CIDR per line, `#` comments) make
+`render-config.sh` route those destinations to a `blackhole` outbound, right after the API rule. Inbounds sniff
+HTTP/TLS/QUIC, so a domain rule matches the SNI even when the client dials an IP. The VPN installer
+(`DataGateVpnInstall`, `BLOCKLIST_ENABLED`) copies its `blocklist/ru-services.*` under `/data/blocklist` and sets
+both. A missing or empty list leaves the config unpatched. Smoke: `scripts/xray/tests/blocklist-routing.smoke.sh`.
+
 ### Online sessions that never disconnect
 
 Since Xray-core 26.3 the online map is refcounted per inbound connection and has no expiry (`app/stats/online_map.go`), and the VLESS inbound never applies `policy.timeout.connIdle`. A client that disappears without FIN (mobile handover, suspended laptop) therefore leaves its socket in `ESTABLISHED` and stays online in `statsonlineiplist` indefinitely — and because `lastSeen` freezes, our session key stays stable and the dashboard row never closes.
