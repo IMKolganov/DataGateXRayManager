@@ -48,6 +48,7 @@ public static class ServiceConfiguration
         services.AddHttpClient<MicroserviceJwtValidator>(client =>
         {
             client.BaseAddress = BackendBaseAddress.TryResolve(config);
+            BackendClientIdentity.Apply(client);
         });
 
         services.AddSingleton<IMicroserviceJwtValidator>(sp =>
@@ -62,6 +63,7 @@ public static class ServiceConfiguration
         services.AddHttpClient(VpnServerAnnounceHostedService.HttpClientName, client =>
         {
             client.BaseAddress = BackendBaseAddress.TryResolve(config);
+            BackendClientIdentity.Apply(client);
             client.Timeout = TimeSpan.FromSeconds(30);
         });
         services.AddHostedService<VpnServerAnnounceHostedService>();
